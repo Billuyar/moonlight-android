@@ -258,6 +258,7 @@ public class GameMenu implements Game.GameMenuCallbacks {
         if (!game.isOnExternalDisplay()) {
             options.add(new MenuOption(getString(R.string.game_menu_toggle_pc_keys_overlay), true, game::togglePcKeysOverlay));
             options.add(new MenuOption(getString(R.string.game_menu_toggle_pc_keys_overlay_single), true, game::togglePcKeysOverlaySingle));
+            options.add(new MenuOption(getString(R.string.game_menu_toggle_pc_keys_overlay_dock_position), true, game::togglePcKeysOverlayDockPosition));
         }
         options.add(new MenuOption(getString(R.string.game_menu_task_manager), true, () -> sendKeys(new short[]{KeyboardTranslator.VK_LCONTROL, KeyboardTranslator.VK_LSHIFT, KeyboardTranslator.VK_ESCAPE})));
 

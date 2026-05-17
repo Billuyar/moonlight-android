@@ -111,6 +111,7 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.NotificationManagerCompat;
 import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.preference.PreferenceManager;
 
@@ -181,6 +182,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     private PcKeysOverlayController pcKeysOverlayController;
     private PcKeysOverlayController pcKeysOverlaySingleController;
+    // Persisted preference: dock the PC-keys overlay at the bottom of the stream
+    // (true) or float it at the top (false, default). Applies to both variants.
+    private static final String PREF_PC_KEYS_DOCK_BOTTOM = "pc_keys_dock_bottom";
+    private boolean pcKeysDockBottom = false;
 
     private PreferenceConfiguration prefConfig;
     private SharedPreferences tombstonePrefs;
@@ -215,13 +220,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private StreamContainer streamContainer;
     private long synthTouchDownTime = 0;
 
-    // Soft-keyboard (IME) overlap: bottom inset of the IME, in pixels. The stream is
-    // resized up by this amount so the host display stays visible above the keyboard.
+    // Soft-keyboard (IME) bottom inset in pixels. Pushed into PanZoomHandler (so
+    // the user can manually pan the stream up to reach content hidden behind the
+    // keyboard) and into the docked PC-keys overlay (so it sits above the keyboard).
     private int imeBottomInset = 0;
-    // Previous pan/zoom state — restored when the IME closes. While the IME is up
-    // we force pan/zoom mode on so the user can finger-pan to find their text box,
-    // matching Acronis Remotix's behavior.
-    private boolean panZoomBeforeIme = false;
 
     private boolean pendingDrag = false;
     private boolean isDragging = false;
@@ -366,6 +368,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         // Read the stream preferences
         prefConfig = PreferenceConfiguration.readPreferences(this);
+        pcKeysDockBottom = PreferenceManager.getDefaultSharedPreferences(this)
+                .getBoolean(PREF_PC_KEYS_DOCK_BOTTOM, false);
         tombstonePrefs = Game.this.getSharedPreferences("DecoderTombstone", 0);
 
         if (prefConfig.fullScreen) {
@@ -387,6 +391,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         // Change volume button behavior
         setVolumeControlStream(AudioManager.STREAM_MUSIC);
+
+        // Take responsibility for our own insets — combined with
+        // windowSoftInputMode=adjustResize, this gives us live IME insets without
+        // the system auto-shrinking our layout when the soft keyboard opens.
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
 
         // Inflate the content
         setContentView(R.layout.activity_game);
@@ -477,36 +486,25 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         streamContainer.setInputCallbacks(this);
         streamContainer.setCommitTextEnabled(prefConfig.enableCommitText);
 
-        // When the soft keyboard opens, leave the stream at 1:1 scale but let the
-        // user finger-scroll it vertically to slide content out from behind the
-        // keyboard. We push the IME bottom inset into PanZoomHandler which expands
-        // its legal childY range, and auto-enable pan/zoom mode so finger drags pan
-        // the stream instead of moving the host cursor. Restore previous pan/zoom
-        // state on IME close. Skip on external display (IME is on the phone, not
-        // the streamed view).
+        // When the soft keyboard opens we push its bottom inset to PanZoomHandler
+        // (so the user can manually pan the stream up to reveal what's behind the
+        // keyboard, when they enable pan/zoom mode themselves) and to the docked
+        // PC-keys overlay (so it slides above the keyboard). We don't auto-toggle
+        // pan/zoom mode, don't auto-reset zoom, and don't resize the stream — the
+        // user manages all of that explicitly. Skip on external display.
         ViewCompat.setOnApplyWindowInsetsListener(streamContainer, (v, insets) -> {
             if (!isOnExternalDisplay()) {
                 int newInset = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom;
                 if (newInset != imeBottomInset) {
-                    boolean opening = imeBottomInset == 0 && newInset > 0;
-                    boolean closing = imeBottomInset > 0 && newInset == 0;
                     imeBottomInset = newInset;
-
-                    if (opening && !isPanZoomMode) {
-                        panZoomBeforeIme = false;
-                        toggleZoomMode();
-                    } else if (closing && !panZoomBeforeIme && isPanZoomMode) {
-                        toggleZoomMode();
-                    }
-
                     if (panZoomHandler != null) {
                         panZoomHandler.setImeBottomInset(newInset);
-                        // On IME close, restore the stream to its natural 1:1 view
-                        // so the user isn't stuck zoomed in after we've already
-                        // disabled pan/zoom mode (they couldn't pinch out anymore).
-                        if (closing) {
-                            panZoomHandler.resetToFit();
-                        }
+                    }
+                    if (pcKeysOverlayController != null) {
+                        pcKeysOverlayController.setImeBottomInset(newInset);
+                    }
+                    if (pcKeysOverlaySingleController != null) {
+                        pcKeysOverlaySingleController.setImeBottomInset(newInset);
                     }
                 }
             }
@@ -1162,6 +1160,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     private void initPcKeysOverlay() {
         pcKeysOverlayController = new PcKeysOverlayController((FrameLayout) rootView, this, prefConfig);
+        pcKeysOverlayController.setDockAtBottom(pcKeysDockBottom);
+        pcKeysOverlayController.setImeBottomInset(imeBottomInset);
         pcKeysOverlayController.refreshLayout();
         pcKeysOverlayController.show();
     }
@@ -1190,8 +1190,27 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         pcKeysOverlaySingleController = new PcKeysOverlayController(
                 (FrameLayout) rootView, this, prefConfig,
                 R.layout.layout_pc_keys_overlay_single, 60);
+        pcKeysOverlaySingleController.setDockAtBottom(pcKeysDockBottom);
+        pcKeysOverlaySingleController.setImeBottomInset(imeBottomInset);
         pcKeysOverlaySingleController.refreshLayout();
         pcKeysOverlaySingleController.show();
+    }
+
+    // Flip the dock-at-bottom preference. Persists across sessions and re-positions
+    // any currently-shown overlay immediately.
+    public void togglePcKeysOverlayDockPosition() {
+        pcKeysDockBottom = !pcKeysDockBottom;
+        PreferenceManager.getDefaultSharedPreferences(this).edit()
+                .putBoolean(PREF_PC_KEYS_DOCK_BOTTOM, pcKeysDockBottom).apply();
+        if (pcKeysOverlayController != null) {
+            pcKeysOverlayController.setDockAtBottom(pcKeysDockBottom);
+        }
+        if (pcKeysOverlaySingleController != null) {
+            pcKeysOverlaySingleController.setDockAtBottom(pcKeysDockBottom);
+        }
+        Toast.makeText(this,
+                pcKeysDockBottom ? R.string.toast_pc_keys_docked_bottom : R.string.toast_pc_keys_docked_top,
+                Toast.LENGTH_SHORT).show();
     }
 
     // Single-row variant of the PC-keys overlay. Minimal: Tab, Esc, modifiers,
@@ -1223,6 +1242,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             pcKeysOverlaySingleController.hide();
         }
     }
+
 
     //显示隐藏虚拟特殊按键
     public void toggleKeyboardController(){

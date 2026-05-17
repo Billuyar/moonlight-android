@@ -56,6 +56,18 @@ public class PcKeysOverlayController {
     // Bitset of currently-latched modifier KeyEvent codes.
     private final BitSet latchedModifiers = new BitSet();
 
+    // Where to dock the panel: top (false, default) or bottom (true). When docked
+    // at bottom and the IME is up, the panel sits above the keyboard.
+    private boolean dockAtBottom = false;
+    private int imeBottomInset = 0;
+
+    public interface VisibilityListener { void onVisibilityChanged(); }
+    private VisibilityListener visibilityListener;
+    public void setVisibilityListener(VisibilityListener l) { this.visibilityListener = l; }
+    private void notifyVisibilityChanged() {
+        if (visibilityListener != null) visibilityListener.onVisibilityChanged();
+    }
+
     public PcKeysOverlayController(FrameLayout layout, Context context, PreferenceConfiguration prefConfig) {
         this(layout, context, prefConfig, R.layout.layout_pc_keys_overlay, 120);
     }
@@ -172,21 +184,25 @@ public class PcKeysOverlayController {
             }
         }
         shown = false;
+        notifyVisibilityChanged();
     }
 
     public void show() {
         overlayView.setVisibility(View.VISIBLE);
         shown = true;
+        notifyVisibilityChanged();
     }
 
     public void toggleVisibility() {
-        if (isVisible()) hide();
-        else show();
+        if (isVisible()) hide(); // hide() fires the visibility listener
+        else show();             // show() fires the visibility listener
     }
 
     /**
-     * Add the panel to the parent FrameLayout at the top center of the screen.
-     * Width is full-screen; height is the value the constructor was called with.
+     * Add the panel to the parent FrameLayout. Width is full-screen; height is
+     * the value the constructor was called with. Position is controlled by
+     * dockAtBottom; when docked at bottom and an IME is up, the panel sits
+     * above the keyboard via a bottom margin.
      */
     public void refreshLayout() {
         if (overlayView.getParent() != null) {
@@ -196,9 +212,37 @@ public class PcKeysOverlayController {
         int width = screen.widthPixels;
         int height = dip2px(heightDp);
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(width, height);
-        params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+        if (dockAtBottom) {
+            params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+            params.bottomMargin = imeBottomInset;
+        } else {
+            params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+        }
         overlayView.setAlpha(prefConfig.oscKeyboardOpacity / 100f);
         frameLayout.addView(overlayView, params);
+    }
+
+    /** Change the dock position. Re-positions the panel if it's currently shown. */
+    public void setDockAtBottom(boolean dock) {
+        if (this.dockAtBottom == dock) return;
+        this.dockAtBottom = dock;
+        if (overlayView.getParent() != null) {
+            refreshLayout();
+        }
+    }
+
+    /** Height of the panel in pixels (matches the value used by refreshLayout). */
+    public int getHeightPx() {
+        return dip2px(heightDp);
+    }
+
+    /** Push the IME bottom inset so the panel can sit above the keyboard when docked at bottom. */
+    public void setImeBottomInset(int px) {
+        if (this.imeBottomInset == px) return;
+        this.imeBottomInset = px;
+        if (dockAtBottom && overlayView.getParent() != null) {
+            refreshLayout();
+        }
     }
 
     private int dip2px(float dp) {
