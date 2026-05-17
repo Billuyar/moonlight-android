@@ -220,10 +220,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private StreamContainer streamContainer;
     private long synthTouchDownTime = 0;
 
-    // Soft-keyboard (IME) bottom inset in pixels. Pushed into PanZoomHandler (so
-    // the user can manually pan the stream up to reach content hidden behind the
-    // keyboard) and into the docked PC-keys overlay (so it sits above the keyboard).
+    // Soft-keyboard (IME) bottom inset in pixels. Pushed into PanZoomHandler so
+    // the user can pan the stream up to reach content hidden behind the keyboard,
+    // and into the docked PC-keys overlay so it sits above the keyboard.
     private int imeBottomInset = 0;
+    // Previous pan/zoom mode state — when the IME opens we auto-enable pan/zoom
+    // mode so two-finger drag pans the stream out from behind the keyboard. On
+    // close we restore the previous state and reset the stream to 1:1 fit.
+    private boolean panZoomBeforeIme = false;
 
     private boolean pendingDrag = false;
     private boolean isDragging = false;
@@ -496,9 +500,31 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             if (!isOnExternalDisplay()) {
                 int newInset = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom;
                 if (newInset != imeBottomInset) {
+                    boolean opening = imeBottomInset == 0 && newInset > 0;
+                    boolean closing = imeBottomInset > 0 && newInset == 0;
                     imeBottomInset = newInset;
+
+                    // Auto-enable pan/zoom mode while the IME is up so a two-finger
+                    // drag pans the stream — otherwise the bottom of the stream
+                    // (where the cursor often is) stays hidden behind the keyboard.
+                    // Restore the previous mode on IME close.
+                    if (opening) {
+                        panZoomBeforeIme = isPanZoomMode;
+                        if (!isPanZoomMode) {
+                            toggleZoomMode();
+                        }
+                    } else if (closing && !panZoomBeforeIme && isPanZoomMode) {
+                        toggleZoomMode();
+                    }
+
                     if (panZoomHandler != null) {
                         panZoomHandler.setImeBottomInset(newInset);
+                        // On IME close, reset the stream to 1:1 fit so any pan/zoom
+                        // accumulated while the keyboard was up doesn't leave the
+                        // user stuck with an unintended view.
+                        if (closing) {
+                            panZoomHandler.resetToFit();
+                        }
                     }
                     if (pcKeysOverlayController != null) {
                         pcKeysOverlayController.setImeBottomInset(newInset);
