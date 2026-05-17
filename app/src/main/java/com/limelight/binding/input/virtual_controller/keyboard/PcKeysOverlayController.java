@@ -49,6 +49,7 @@ public class PcKeysOverlayController {
     private final PreferenceConfiguration prefConfig;
     private final FrameLayout frameLayout;
     private final LinearLayout overlayView;
+    private final int heightDp;
 
     public boolean shown = false;
 
@@ -56,11 +57,18 @@ public class PcKeysOverlayController {
     private final BitSet latchedModifiers = new BitSet();
 
     public PcKeysOverlayController(FrameLayout layout, Context context, PreferenceConfiguration prefConfig) {
+        this(layout, context, prefConfig, R.layout.layout_pc_keys_overlay, 120);
+    }
+
+    public PcKeysOverlayController(FrameLayout layout, Context context,
+                                   PreferenceConfiguration prefConfig,
+                                   int layoutResId, int heightDp) {
         this.frameLayout = layout;
         this.context = context;
         this.prefConfig = prefConfig;
+        this.heightDp = heightDp;
         this.overlayView = (LinearLayout) LayoutInflater.from(context)
-                .inflate(R.layout.layout_pc_keys_overlay, null);
+                .inflate(layoutResId, null);
         bindKeys();
     }
 
@@ -178,7 +186,7 @@ public class PcKeysOverlayController {
 
     /**
      * Add the panel to the parent FrameLayout at the top center of the screen.
-     * Width is full-screen; height is fixed at 120dp (defined in the XML).
+     * Width is full-screen; height is the value the constructor was called with.
      */
     public void refreshLayout() {
         if (overlayView.getParent() != null) {
@@ -186,7 +194,7 @@ public class PcKeysOverlayController {
         }
         DisplayMetrics screen = context.getResources().getDisplayMetrics();
         int width = screen.widthPixels;
-        int height = dip2px(120);
+        int height = dip2px(heightDp);
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(width, height);
         params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
         overlayView.setAlpha(prefConfig.oscKeyboardOpacity / 100f);

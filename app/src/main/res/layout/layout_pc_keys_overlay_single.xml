@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+PC-keys overlay, single-row variant. Minimal essentials only: Tab + Esc, the
+four modifier latches, Backspace, the arrow cluster, and Enter. No F-keys,
+no Ins/Del cluster, no hide button (dismissed via the menu toggle).
+
+Each key uses android:tag = Android KeyEvent.KEYCODE_*. Layout weights mean
+the row shrinks proportionally on smaller screens / portrait orientation
+rather than overflowing.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="60dp"
+    android:padding="3dp"
+    android:background="#212121"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="horizontal">
+
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="110" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="61"  android:text="Tab"   android:textSize="12sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="110" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="111" android:text="ESC"   android:textSize="12sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="120" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="113" android:text="Ctrl"  android:textSize="12sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="110" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="57"  android:text="Alt"   android:textSize="12sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="120" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="59"  android:text="Shift" android:textSize="12sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="110" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="117" android:text="Win"   android:textSize="12sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="130" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="67"  android:text="⌫"     android:textSize="16sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="100" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="21"  android:text="←"     android:textSize="16sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="100" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="19"  android:text="↑"     android:textSize="16sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="100" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="20"  android:text="↓"     android:textSize="16sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="100" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="22"  android:text="→"     android:textSize="16sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="130" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="66"  android:text="⏎"     android:textSize="16sp" />
+    </LinearLayout>
+</LinearLayout>

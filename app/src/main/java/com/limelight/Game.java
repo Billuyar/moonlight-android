@@ -180,6 +180,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private KeyBoardLayoutController keyBoardLayoutController;
 
     private PcKeysOverlayController pcKeysOverlayController;
+    private PcKeysOverlayController pcKeysOverlaySingleController;
 
     private PreferenceConfiguration prefConfig;
     private SharedPreferences tombstonePrefs;
@@ -1165,19 +1166,62 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         pcKeysOverlayController.show();
     }
 
-    // Toggle the compact PC-keys overlay (F-keys, modifier latches, arrow cluster,
+    // Toggle the two-row PC-keys overlay (F-keys, modifier latches, arrow cluster,
     // Home/End/PgUp/PgDn, Ins/Del). Designed to be used with the Android soft
-    // keyboard, which provides letters/digits.
+    // keyboard, which provides letters/digits. Mutually exclusive with the
+    // single-row variant — turning this on hides that one.
     public void togglePcKeysOverlay() {
         if (isOnExternalDisplay()) {
             // On external display the host has its own keyboard handling.
             return;
         }
         if (pcKeysOverlayController == null) {
+            hidePcKeysOverlaySingleIfShown();
             initPcKeysOverlay();
             return;
         }
+        if (!pcKeysOverlayController.isVisible()) {
+            hidePcKeysOverlaySingleIfShown();
+        }
         pcKeysOverlayController.toggleVisibility();
+    }
+
+    private void initPcKeysOverlaySingle() {
+        pcKeysOverlaySingleController = new PcKeysOverlayController(
+                (FrameLayout) rootView, this, prefConfig,
+                R.layout.layout_pc_keys_overlay_single, 60);
+        pcKeysOverlaySingleController.refreshLayout();
+        pcKeysOverlaySingleController.show();
+    }
+
+    // Single-row variant of the PC-keys overlay. Minimal: Tab, Esc, modifiers,
+    // Backspace, arrows, Enter. No F-keys, no Ins/Del, no hide button (dismissed
+    // via the menu toggle). Mutually exclusive with the two-row variant.
+    public void togglePcKeysOverlaySingle() {
+        if (isOnExternalDisplay()) {
+            return;
+        }
+        if (pcKeysOverlaySingleController == null) {
+            hidePcKeysOverlayIfShown();
+            initPcKeysOverlaySingle();
+            return;
+        }
+        if (!pcKeysOverlaySingleController.isVisible()) {
+            hidePcKeysOverlayIfShown();
+        }
+        pcKeysOverlaySingleController.toggleVisibility();
+    }
+
+    private void hidePcKeysOverlayIfShown() {
+        if (pcKeysOverlayController != null && pcKeysOverlayController.isVisible()) {
+            pcKeysOverlayController.hide();
+        }
+    }
+
+    private void hidePcKeysOverlaySingleIfShown() {
+        if (pcKeysOverlaySingleController != null && pcKeysOverlaySingleController.isVisible()) {
+            pcKeysOverlaySingleController.hide();
+        }
     }
 
     //显示隐藏虚拟特殊按键
