@@ -935,4 +935,35 @@ public class NvHTTP {
             return false;
         }
     }
+
+    /**
+     * POST the given text to a plain-HTTP clipboard-relay daemon running on the
+     * host (see /data/screens/scripts/clipboard_relay.py). Used as a workaround
+     * for Sunshine versions that don't expose a clipboard-write API: the relay
+     * sets the host's X clipboard via xclip, then the client sends Ctrl+V via
+     * the regular Moonlight protocol to paste the text.
+     *
+     * @param relayPort  TCP port the relay listens on (typically 47999)
+     * @param content    UTF-8 text to push to host clipboard
+     * @return true on HTTP 2xx, false on any other status / network error
+     */
+    public boolean sendClipboardToRelay(int relayPort, String content) {
+        HttpUrl url = new HttpUrl.Builder()
+                .scheme("http")
+                .host(baseUrlHttp.host())
+                .port(relayPort)
+                .addPathSegment("clipboard")
+                .build();
+        try {
+            okhttp3.Request request = new okhttp3.Request.Builder()
+                    .url(url)
+                    .post(RequestBody.create(content, MediaType.parse("text/plain; charset=utf-8")))
+                    .build();
+            try (okhttp3.Response response = httpClientLongConnectTimeout.newCall(request).execute()) {
+                return response.isSuccessful();
+            }
+        } catch (IOException e) {
+            return false;
+        }
+    }
 }

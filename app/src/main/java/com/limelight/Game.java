@@ -2298,7 +2298,15 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     // UTF-8 events don't auto-repeat on the host side.
                     int unicodeChar = event.getUnicodeChar();
                     if ((unicodeChar & KeyCharacterMap.COMBINING_ACCENT) == 0 && (unicodeChar & KeyCharacterMap.COMBINING_ACCENT_MASK) != 0) {
-                        conn.sendUtf8Text(""+(char)unicodeChar);
+                        char ch = (char) unicodeChar;
+                        if (ch > 0x7F) {
+                            // Non-ASCII (e.g. Turkish ı/ş/ğ) — Sunshine's UTF-8
+                            // keystroke synthesis garbles these. Route via the
+                            // clipboard + paste fallback instead.
+                            sendNonAsciiViaClipboard(String.valueOf(ch));
+                        } else {
+                            conn.sendUtf8Text("" + ch);
+                        }
                         return true;
                     }
 
@@ -2409,7 +2417,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             return false;
         }
 
-        conn.sendUtf8Text(event.getCharacters());
+        String chars = event.getCharacters();
+        if (isAscii(chars)) {
+            conn.sendUtf8Text(chars);
+        } else {
+            // Route Unicode via clipboard + paste — Sunshine's UTF-8 keystroke
+            // path produces wrong characters on the host for non-Latin text.
+            sendNonAsciiViaClipboard(chars);
+        }
         return true;
     }
 
@@ -4497,8 +4512,57 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (!prefConfig.enableCommitText || conn == null) {
             return false;
         }
-        enqueueCommitText(text.toString());
+        String s = text.toString();
+        if (isAscii(s)) {
+            enqueueCommitText(s);
+        } else {
+            // Sunshine's UTF-8 keystroke synthesis has known issues with some
+            // non-Latin characters (Turkish ı/ş/ğ etc. produce wrong keys on the
+            // host). Route non-ASCII via the clipboard + paste path instead: push
+            // the text into the host clipboard, then send Ctrl+V. Works for any
+            // Unicode regardless of host keymap.
+            sendNonAsciiViaClipboard(s);
+        }
         return true;
+    }
+
+    private static boolean isAscii(String s) {
+        for (int i = 0; i < s.length(); i++) {
+            if (s.charAt(i) > 0x7F) return false;
+        }
+        return true;
+    }
+
+    // Plain-HTTP port on the host where the clipboard-relay daemon listens.
+    // See /data/screens/scripts/clipboard_relay.py — the daemon writes its POST
+    // body to the host's X clipboard, working around Sunshine builds that don't
+    // expose a clipboard-write API.
+    private static final int CLIPBOARD_RELAY_PORT = 47999;
+
+    private void sendNonAsciiViaClipboard(final String text) {
+        if (httpConn == null) {
+            return;
+        }
+        // Also set the local Android clipboard so the text is available on the
+        // tablet for manual paste.
+        try {
+            clipboardManager.setPrimaryClip(ClipData.newPlainText(CLIPBOARD_IDENTIFIER, text));
+        } catch (Exception ignored) {
+        }
+        new Thread(() -> {
+            try {
+                if (httpConn.sendClipboardToRelay(CLIPBOARD_RELAY_PORT, text)) {
+                    runOnUiThread(() -> sendKeys(new short[] {
+                            KeyboardTranslator.VK_LCONTROL,
+                            (short) 0x56 // VK_V
+                    }));
+                } else {
+                    LimeLog.warning("Non-ASCII commit-text: clipboard relay did not accept (is the daemon running on the host?)");
+                }
+            } catch (Exception e) {
+                LimeLog.warning("Non-ASCII commit-text via clipboard relay failed: " + e);
+            }
+        }).start();
     }
 
     @Override
