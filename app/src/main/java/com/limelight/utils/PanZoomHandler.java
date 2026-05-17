@@ -24,6 +24,10 @@ public class PanZoomHandler {
     private float childX, childY = 0;
     private float parentWidth, parentHeight = 0;
     private float childWidth, childHeight = 0;
+    // When the soft keyboard is up, the bottom imeBottomInset pixels of the parent
+    // are obscured. We treat the visible parent as (parentWidth, parentHeight - this)
+    // so the user can scroll the stream up to reveal what was hidden behind the IME.
+    private int imeBottomInset = 0;
 
     public PanZoomHandler(Context context, Game game, View streamView, View parent, PreferenceConfiguration prefConfig) {
         this.game = game;
@@ -61,14 +65,19 @@ public class PanZoomHandler {
             childX = Math.max(boundaryX, Math.min(childX, 0));
         }
 
-        if (parentHeight >= childHeight) {
+        // While the IME covers the bottom of the parent, treat the visible area as
+        // shorter so the user can pan the stream up to reveal what's hidden behind
+        // the keyboard. At scale 1 with imeBottomInset > 0 this gives a vertical
+        // scroll range of [parentHeight - imeBottomInset - childHeight, 0].
+        float effectiveParentHeight = parentHeight - imeBottomInset;
+        if (effectiveParentHeight >= childHeight) {
             if (isTopMode) {
                 childY = 0;
             } else {
-                childY = (parentHeight - childHeight) / 2;
+                childY = (effectiveParentHeight - childHeight) / 2;
             }
         } else {
-            float boundaryY = parentHeight - childHeight;
+            float boundaryY = effectiveParentHeight - childHeight;
             childY = Math.max(boundaryY, Math.min(childY, 0));
         }
 
@@ -165,6 +174,34 @@ public class PanZoomHandler {
         this.childY = offsetY;
         streamView.setX(childX);
         streamView.setY(childY);
+    }
+
+    /**
+     * Reset zoom to 1.0 and re-center the child within the (current) parent. Used
+     * when the parent's size changes (e.g. soft keyboard opens and resizes the
+     * stream container) so the user starts from a sane "everything visible" state
+     * before they pan/zoom from there.
+     */
+    public void resetToFit() {
+        scaleFactor = 1.0f;
+        streamView.setScaleX(scaleFactor);
+        streamView.setScaleY(scaleFactor);
+        childX = 0;
+        childY = 0;
+        streamView.setX(childX);
+        streamView.setY(childY);
+        constrainToBounds();
+    }
+
+    /**
+     * Tell PanZoomHandler how much of the bottom of the parent is currently
+     * obscured by the soft keyboard. This expands the legal childY range so the
+     * user can pan the stream up to bring hidden content out from behind the IME.
+     * Call with 0 when the keyboard closes.
+     */
+    public void setImeBottomInset(int px) {
+        this.imeBottomInset = px;
+        constrainToBounds();
     }
 
     public float getScaleFactor() { return scaleFactor; }

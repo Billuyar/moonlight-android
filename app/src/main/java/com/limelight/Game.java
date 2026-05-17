@@ -109,6 +109,8 @@ import android.widget.ImageButton;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.NotificationManagerCompat;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
 import androidx.preference.PreferenceManager;
 
 import android.os.Looper;
@@ -208,6 +210,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private int specialKeyCode = KeyEvent.KEYCODE_UNKNOWN;
     private StreamContainer streamContainer;
     private long synthTouchDownTime = 0;
+
+    // Soft-keyboard (IME) overlap: bottom inset of the IME, in pixels. The stream is
+    // resized up by this amount so the host display stays visible above the keyboard.
+    private int imeBottomInset = 0;
+    // Previous pan/zoom state — restored when the IME closes. While the IME is up
+    // we force pan/zoom mode on so the user can finger-pan to find their text box,
+    // matching Acronis Remotix's behavior.
+    private boolean panZoomBeforeIme = false;
 
     private boolean pendingDrag = false;
     private boolean isDragging = false;
@@ -462,6 +472,42 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         streamContainer.setOnKeyListener(this);
         streamContainer.setInputCallbacks(this);
         streamContainer.setCommitTextEnabled(prefConfig.enableCommitText);
+
+        // When the soft keyboard opens, leave the stream at 1:1 scale but let the
+        // user finger-scroll it vertically to slide content out from behind the
+        // keyboard. We push the IME bottom inset into PanZoomHandler which expands
+        // its legal childY range, and auto-enable pan/zoom mode so finger drags pan
+        // the stream instead of moving the host cursor. Restore previous pan/zoom
+        // state on IME close. Skip on external display (IME is on the phone, not
+        // the streamed view).
+        ViewCompat.setOnApplyWindowInsetsListener(streamContainer, (v, insets) -> {
+            if (!isOnExternalDisplay()) {
+                int newInset = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom;
+                if (newInset != imeBottomInset) {
+                    boolean opening = imeBottomInset == 0 && newInset > 0;
+                    boolean closing = imeBottomInset > 0 && newInset == 0;
+                    imeBottomInset = newInset;
+
+                    if (opening && !isPanZoomMode) {
+                        panZoomBeforeIme = false;
+                        toggleZoomMode();
+                    } else if (closing && !panZoomBeforeIme && isPanZoomMode) {
+                        toggleZoomMode();
+                    }
+
+                    if (panZoomHandler != null) {
+                        panZoomHandler.setImeBottomInset(newInset);
+                        // On IME close, restore the stream to its natural 1:1 view
+                        // so the user isn't stuck zoomed in after we've already
+                        // disabled pan/zoom mode (they couldn't pinch out anymore).
+                        if (closing) {
+                            panZoomHandler.resetToFit();
+                        }
+                    }
+                }
+            }
+            return insets;
+        });
 
         rootView = streamContainer.getParent();
 
