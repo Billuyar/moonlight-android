@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+PC-keys overlay: compact two-row panel exposing the desktop keys the Android soft
+keyboard lacks. Designed to sit at the top of the stream while the Android OSK
+provides the letter/digit/punctuation layer at the bottom.
+
+Each key uses android:tag = Android KeyEvent.KEYCODE_*. The hide button uses
+android:tag="hide". The PcKeysOverlayController iterates rows and binds touch.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="120dp"
+    android:padding="3dp"
+    android:background="#212121"
+    android:orientation="vertical">
+
+    <!-- Row 1: ESC + F1..F12 + Ins + Del + hide -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="horizontal">
+
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="140" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="111" android:text="ESC" android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="100" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="131" android:text="F1"  android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="100" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="132" android:text="F2"  android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="100" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="133" android:text="F3"  android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="100" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="134" android:text="F4"  android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="100" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="135" android:text="F5"  android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="100" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="136" android:text="F6"  android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="100" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="137" android:text="F7"  android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="100" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="138" android:text="F8"  android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="100" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="139" android:text="F9"  android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="100" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="140" android:text="F10" android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="100" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="141" android:text="F11" android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="100" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="142" android:text="F12" android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="110" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="124" android:text="Ins" android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="110" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="112" android:text="Del" android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="110" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="hide" android:text="✕" android:textSize="14sp" />
+    </LinearLayout>
+
+    <!-- Row 2: Ctrl Alt Shift Win | Tab | Home End PgUp PgDn | ← ↑ ↓ → -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="horizontal">
+
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="130" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="113" android:text="Ctrl"  android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="120" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="57"  android:text="Alt"   android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="130" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="59"  android:text="Shift" android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="120" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="117" android:text="Win"   android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="110" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="61"  android:text="Tab"   android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="120" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="122" android:text="Home"  android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="120" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="123" android:text="End"   android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="120" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="92"  android:text="PgUp"  android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="120" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="93"  android:text="PgDn"  android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="100" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="21"  android:text="←"     android:textSize="14sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="100" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="19"  android:text="↑"     android:textSize="14sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="100" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="20"  android:text="↓"     android:textSize="14sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="100" android:layout_margin="2dp" android:background="@drawable/bg_ax_keyboard_button" android:gravity="center" android:textColor="#FFFFFF" android:tag="22"  android:text="→"     android:textSize="14sp" />
+    </LinearLayout>
+</LinearLayout>

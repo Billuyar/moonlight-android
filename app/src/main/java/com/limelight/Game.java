@@ -24,6 +24,7 @@ import com.limelight.binding.input.touch.TrackpadContext;
 import com.limelight.binding.input.virtual_controller.VirtualController;
 import com.limelight.binding.input.virtual_controller.keyboard.KeyBoardController;
 import com.limelight.binding.input.virtual_controller.keyboard.KeyBoardLayoutController;
+import com.limelight.binding.input.virtual_controller.keyboard.PcKeysOverlayController;
 import com.limelight.binding.video.CrashListener;
 import com.limelight.binding.video.MediaCodecDecoderRenderer;
 import com.limelight.binding.video.MediaCodecHelper;
@@ -177,6 +178,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private KeyBoardController keyBoardController;
 
     private KeyBoardLayoutController keyBoardLayoutController;
+
+    private PcKeysOverlayController pcKeysOverlayController;
 
     private PreferenceConfiguration prefConfig;
     private SharedPreferences tombstonePrefs;
@@ -1154,6 +1157,27 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         keyBoardLayoutController = new KeyBoardLayoutController((FrameLayout)rootView, this, prefConfig);
         keyBoardLayoutController.refreshLayout();
         keyBoardLayoutController.show();
+    }
+
+    private void initPcKeysOverlay() {
+        pcKeysOverlayController = new PcKeysOverlayController((FrameLayout) rootView, this, prefConfig);
+        pcKeysOverlayController.refreshLayout();
+        pcKeysOverlayController.show();
+    }
+
+    // Toggle the compact PC-keys overlay (F-keys, modifier latches, arrow cluster,
+    // Home/End/PgUp/PgDn, Ins/Del). Designed to be used with the Android soft
+    // keyboard, which provides letters/digits.
+    public void togglePcKeysOverlay() {
+        if (isOnExternalDisplay()) {
+            // On external display the host has its own keyboard handling.
+            return;
+        }
+        if (pcKeysOverlayController == null) {
+            initPcKeysOverlay();
+            return;
+        }
+        pcKeysOverlayController.toggleVisibility();
     }
 
     //显示隐藏虚拟特殊按键
