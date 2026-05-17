@@ -381,8 +381,11 @@
     <string name="game_menu_toggle_pc_keys_overlay">Toggle PC keys overlay</string>
     <string name="game_menu_toggle_pc_keys_overlay_single">Toggle PC keys overlay (single row)</string>
     <string name="game_menu_toggle_pc_keys_overlay_dock_position">Toggle PC keys position (top/bottom)</string>
+    <string name="game_menu_toggle_pc_keys_reserve_space">Toggle PC keys: reserve stream space</string>
     <string name="toast_pc_keys_docked_top">PC keys docked at top</string>
     <string name="toast_pc_keys_docked_bottom">PC keys docked at bottom</string>
+    <string name="toast_pc_keys_reserve_on">PC keys reserve stream space: ON</string>
+    <string name="toast_pc_keys_reserve_off">PC keys reserve stream space: OFF (overlay)</string>
     <string name="game_menu_switch_touch_sensitivity_model">Switch touch sensitivity</string>
 
 

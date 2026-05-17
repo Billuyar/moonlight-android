@@ -186,6 +186,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private static final String PREF_PC_KEYS_DOCK_BOTTOM = "pc_keys_dock_bottom";
     private boolean pcKeysDockBottom = false;
 
+    // Persisted preference: when the panel is docked at bottom AND visible,
+    // shrink streamContainer by the panel's height so the stream renders above
+    // the panel (no overlap). Off by default — opt in once host resolution is
+    // configured to fit the smaller streamContainer cleanly (e.g. via
+    // display_tweak's "Controls bar: Show" option).
+    private static final String PREF_PC_KEYS_RESERVE_SPACE = "pc_keys_reserve_space";
+    private boolean pcKeysReserveSpace = false;
+
     private PreferenceConfiguration prefConfig;
     private SharedPreferences tombstonePrefs;
 
@@ -373,6 +381,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         prefConfig = PreferenceConfiguration.readPreferences(this);
         pcKeysDockBottom = PreferenceManager.getDefaultSharedPreferences(this)
                 .getBoolean(PREF_PC_KEYS_DOCK_BOTTOM, false);
+        pcKeysReserveSpace = PreferenceManager.getDefaultSharedPreferences(this)
+                .getBoolean(PREF_PC_KEYS_RESERVE_SPACE, false);
         tombstonePrefs = Game.this.getSharedPreferences("DecoderTombstone", 0);
 
         if (prefConfig.fullScreen) {
@@ -1182,6 +1192,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         pcKeysOverlayController = new PcKeysOverlayController((FrameLayout) rootView, this, prefConfig);
         pcKeysOverlayController.setDockAtBottom(pcKeysDockBottom);
         pcKeysOverlayController.setImeBottomInset(imeBottomInset);
+        pcKeysOverlayController.setVisibilityListener(this::applyPanelReserveToStreamContainer);
         pcKeysOverlayController.refreshLayout();
         pcKeysOverlayController.show();
     }
@@ -1212,6 +1223,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 R.layout.layout_pc_keys_overlay_single, 60);
         pcKeysOverlaySingleController.setDockAtBottom(pcKeysDockBottom);
         pcKeysOverlaySingleController.setImeBottomInset(imeBottomInset);
+        pcKeysOverlaySingleController.setVisibilityListener(this::applyPanelReserveToStreamContainer);
         pcKeysOverlaySingleController.refreshLayout();
         pcKeysOverlaySingleController.show();
     }
@@ -1228,6 +1240,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (pcKeysOverlaySingleController != null) {
             pcKeysOverlaySingleController.setDockAtBottom(pcKeysDockBottom);
         }
+        // Dock position changed — re-evaluate reserve (only applies at bottom).
+        applyPanelReserveToStreamContainer();
         Toast.makeText(this,
                 pcKeysDockBottom ? R.string.toast_pc_keys_docked_bottom : R.string.toast_pc_keys_docked_top,
                 Toast.LENGTH_SHORT).show();
@@ -1261,6 +1275,44 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (pcKeysOverlaySingleController != null && pcKeysOverlaySingleController.isVisible()) {
             pcKeysOverlaySingleController.hide();
         }
+    }
+
+    /**
+     * Reserve space at the bottom of streamContainer equal to the PC-keys panel's
+     * height when reserve-space mode is on AND the panel is docked at bottom AND
+     * visible. Otherwise no reserve (panel sits as an overlay over the stream).
+     * Called whenever any of those three conditions changes.
+     */
+    private void applyPanelReserveToStreamContainer() {
+        int reserve = 0;
+        if (pcKeysReserveSpace && pcKeysDockBottom) {
+            if (pcKeysOverlayController != null && pcKeysOverlayController.isVisible()) {
+                reserve = pcKeysOverlayController.getHeightPx();
+            } else if (pcKeysOverlaySingleController != null && pcKeysOverlaySingleController.isVisible()) {
+                reserve = pcKeysOverlaySingleController.getHeightPx();
+            }
+        }
+        ViewGroup.LayoutParams base = streamContainer.getLayoutParams();
+        if (base instanceof FrameLayout.LayoutParams) {
+            FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) base;
+            if (lp.bottomMargin != reserve) {
+                lp.bottomMargin = reserve;
+                streamContainer.setLayoutParams(lp);
+            }
+        }
+    }
+
+    // Flip the reserve-stream-space preference. When on, the streamContainer is
+    // shrunk so the panel sits in its own space at the bottom rather than
+    // overlaying the stream content.
+    public void togglePcKeysOverlayReserveSpace() {
+        pcKeysReserveSpace = !pcKeysReserveSpace;
+        PreferenceManager.getDefaultSharedPreferences(this).edit()
+                .putBoolean(PREF_PC_KEYS_RESERVE_SPACE, pcKeysReserveSpace).apply();
+        applyPanelReserveToStreamContainer();
+        Toast.makeText(this,
+                pcKeysReserveSpace ? R.string.toast_pc_keys_reserve_on : R.string.toast_pc_keys_reserve_off,
+                Toast.LENGTH_SHORT).show();
     }
 
 
