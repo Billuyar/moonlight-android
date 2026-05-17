@@ -954,15 +954,26 @@ public class NvHTTP {
                 .port(relayPort)
                 .addPathSegment("clipboard")
                 .build();
+        // Use a fresh plain-HTTP OkHttpClient — httpClientLongConnectTimeout is
+        // pre-configured for Sunshine's mutual-TLS handshake and refuses cleartext.
+        okhttp3.OkHttpClient relayClient = new okhttp3.OkHttpClient.Builder()
+                .connectTimeout(2, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(2, java.util.concurrent.TimeUnit.SECONDS)
+                .writeTimeout(2, java.util.concurrent.TimeUnit.SECONDS)
+                .build();
         try {
             okhttp3.Request request = new okhttp3.Request.Builder()
                     .url(url)
                     .post(RequestBody.create(content, MediaType.parse("text/plain; charset=utf-8")))
                     .build();
-            try (okhttp3.Response response = httpClientLongConnectTimeout.newCall(request).execute()) {
+            try (okhttp3.Response response = relayClient.newCall(request).execute()) {
+                if (!response.isSuccessful()) {
+                    com.limelight.LimeLog.warning("Clipboard relay POST returned " + response.code() + " " + response.message() + " from " + url);
+                }
                 return response.isSuccessful();
             }
         } catch (IOException e) {
+            com.limelight.LimeLog.warning("Clipboard relay POST to " + url + " failed: " + e);
             return false;
         }
     }

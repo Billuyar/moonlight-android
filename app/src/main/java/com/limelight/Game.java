@@ -2284,6 +2284,32 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 return false;
             }
 
+            // Route printable characters through the host-side relay which types
+            // using the host's live keymap. This avoids Sunshine's scancode-based
+            // typing landing on the wrong char on non-US layouts. For non-ASCII
+            // codepoints we route regardless of modifier state (Samsung's
+            // Turkish QWERTY uses Alt as AltGr for ç/ş/ğ; the Alt is NOT a
+            // command modifier the host should see). For ASCII we still respect
+            // command modifiers so Ctrl+C / Alt+Tab / Win+L go through the
+            // streaming scancode path and trigger their normal shortcuts.
+            {
+                int unicodeChar = event.getUnicodeChar();
+                if ((unicodeChar & KeyCharacterMap.COMBINING_ACCENT) == 0
+                        && (unicodeChar & KeyCharacterMap.COMBINING_ACCENT_MASK) != 0
+                        && ((char) unicodeChar) >= 0x20
+                        && ((char) unicodeChar) != 0x7F) {
+                    char ch = (char) unicodeChar;
+                    int meta = event.getMetaState();
+                    boolean cmdModifier = (meta & (KeyEvent.META_CTRL_ON
+                            | KeyEvent.META_ALT_ON
+                            | KeyEvent.META_META_ON)) != 0;
+                    if (ch > 0x7F || !cmdModifier) {
+                        sendNonAsciiViaClipboard(String.valueOf(ch));
+                        return true;
+                    }
+                }
+            }
+
             // We'll send it as a raw key event if we have a key mapping, otherwise we'll send it
             // as UTF-8 text (if it's a printable character).
             short translated = keyboardTranslator.translate(event.getKeyCode(), event.getScanCode(), deviceId);
@@ -2291,25 +2317,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 if (prefConfig.backAsMeta && event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
                     translated = 0x5b; // Meta key
                 } else {
-                    // Make sure it has a valid Unicode representation and it's not a dead character
-                    // (which we don't support). If those are true, we can send it as UTF-8 text.
-                    //
-                    // NB: We need to be sure this happens before the getRepeatCount() check because
-                    // UTF-8 events don't auto-repeat on the host side.
+                    // ASCII Unicode fallback for keys with no scancode mapping.
                     int unicodeChar = event.getUnicodeChar();
                     if ((unicodeChar & KeyCharacterMap.COMBINING_ACCENT) == 0 && (unicodeChar & KeyCharacterMap.COMBINING_ACCENT_MASK) != 0) {
-                        char ch = (char) unicodeChar;
-                        if (ch > 0x7F) {
-                            // Non-ASCII (e.g. Turkish ı/ş/ğ) — Sunshine's UTF-8
-                            // keystroke synthesis garbles these. Route via the
-                            // clipboard + paste fallback instead.
-                            sendNonAsciiViaClipboard(String.valueOf(ch));
-                        } else {
-                            conn.sendUtf8Text("" + ch);
-                        }
+                        conn.sendUtf8Text("" + (char) unicodeChar);
                         return true;
                     }
-
                     return false;
                 }
             }
@@ -2417,14 +2430,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             return false;
         }
 
-        String chars = event.getCharacters();
-        if (isAscii(chars)) {
-            conn.sendUtf8Text(chars);
-        } else {
-            // Route Unicode via clipboard + paste — Sunshine's UTF-8 keystroke
-            // path produces wrong characters on the host for non-Latin text.
-            sendNonAsciiViaClipboard(chars);
-        }
+        sendNonAsciiViaClipboard(event.getCharacters());
         return true;
     }
 
@@ -4512,57 +4518,75 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (!prefConfig.enableCommitText || conn == null) {
             return false;
         }
-        String s = text.toString();
-        if (isAscii(s)) {
-            enqueueCommitText(s);
-        } else {
-            // Sunshine's UTF-8 keystroke synthesis has known issues with some
-            // non-Latin characters (Turkish ı/ş/ğ etc. produce wrong keys on the
-            // host). Route non-ASCII via the clipboard + paste path instead: push
-            // the text into the host clipboard, then send Ctrl+V. Works for any
-            // Unicode regardless of host keymap.
-            sendNonAsciiViaClipboard(s);
-        }
+        // Route ALL commit-text through the host-side relay (which uses XTest
+        // keysym lookup against the host's current keymap). Sunshine's own
+        // scancode-based typing produces wrong characters on non-US keyboard
+        // layouts — e.g. ASCII "i" lands on keycode 31 which on Turkish Q is
+        // the "ı" key. The daemon picks the actual keycode for each character
+        // on the live keymap, so layout differences disappear.
+        sendNonAsciiViaClipboard(text.toString());
         return true;
     }
 
-    private static boolean isAscii(String s) {
-        for (int i = 0; i < s.length(); i++) {
-            if (s.charAt(i) > 0x7F) return false;
-        }
-        return true;
-    }
 
     // Plain-HTTP port on the host where the clipboard-relay daemon listens.
     // See /data/screens/scripts/clipboard_relay.py — the daemon writes its POST
     // body to the host's X clipboard, working around Sunshine builds that don't
     // expose a clipboard-write API.
     private static final int CLIPBOARD_RELAY_PORT = 47999;
+    // Debounce window for batching rapid non-ASCII characters into one paste.
+    private static final long NON_ASCII_FLUSH_DELAY_MS = 120;
+    // Minimum time between consecutive clipboard-paste operations so each
+    // Ctrl+V actually lands on the host before the next clipboard overwrite.
+    private static final long NON_ASCII_PASTE_INTERVAL_MS = 250;
+
+    private final StringBuilder nonAsciiPending = new StringBuilder();
+    private final Handler nonAsciiHandler = new Handler(Looper.getMainLooper());
+    private final Runnable nonAsciiFlush = this::flushNonAsciiBatch;
+    // Single-thread executor: serialises POST + Ctrl+V so consecutive Turkish
+    // characters don't race each other's clipboards.
+    private final java.util.concurrent.ExecutorService nonAsciiExecutor =
+            java.util.concurrent.Executors.newSingleThreadExecutor();
 
     private void sendNonAsciiViaClipboard(final String text) {
-        if (httpConn == null) {
+        if (httpConn == null || text == null || text.isEmpty()) {
             return;
         }
-        // Also set the local Android clipboard so the text is available on the
-        // tablet for manual paste.
+        // Append to the pending batch and (re)schedule a flush. Multiple rapid
+        // characters within NON_ASCII_FLUSH_DELAY_MS become a single paste.
+        nonAsciiPending.append(text);
+        nonAsciiHandler.removeCallbacks(nonAsciiFlush);
+        nonAsciiHandler.postDelayed(nonAsciiFlush, NON_ASCII_FLUSH_DELAY_MS);
+    }
+
+    private void flushNonAsciiBatch() {
+        if (nonAsciiPending.length() == 0 || httpConn == null) {
+            return;
+        }
+        final String batch = nonAsciiPending.toString();
+        nonAsciiPending.setLength(0);
+        // Update the local Android clipboard for visibility / manual re-paste.
         try {
-            clipboardManager.setPrimaryClip(ClipData.newPlainText(CLIPBOARD_IDENTIFIER, text));
+            clipboardManager.setPrimaryClip(ClipData.newPlainText(CLIPBOARD_IDENTIFIER, batch));
         } catch (Exception ignored) {
         }
-        new Thread(() -> {
+        nonAsciiExecutor.submit(() -> {
             try {
-                if (httpConn.sendClipboardToRelay(CLIPBOARD_RELAY_PORT, text)) {
-                    runOnUiThread(() -> sendKeys(new short[] {
-                            KeyboardTranslator.VK_LCONTROL,
-                            (short) 0x56 // VK_V
-                    }));
-                } else {
-                    LimeLog.warning("Non-ASCII commit-text: clipboard relay did not accept (is the daemon running on the host?)");
+                if (!httpConn.sendClipboardToRelay(CLIPBOARD_RELAY_PORT, batch)) {
+                    LimeLog.warning("Non-ASCII relay did not accept (is the daemon running on the host?)");
+                    return;
                 }
+                // The daemon types each character directly via XTest, so we
+                // don't need to send a Ctrl+V over the streaming protocol.
+                // Still pace consecutive batches so rapid typing doesn't
+                // overwhelm the host's X server.
+                Thread.sleep(NON_ASCII_PASTE_INTERVAL_MS);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
             } catch (Exception e) {
-                LimeLog.warning("Non-ASCII commit-text via clipboard relay failed: " + e);
+                LimeLog.warning("Non-ASCII relay POST failed: " + e);
             }
-        }).start();
+        });
     }
 
     @Override
