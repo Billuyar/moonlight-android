@@ -475,7 +475,7 @@
             android:title="@string/title_checkbox_ignore_synth_events"
             app:iconSpaceReserved="false" />
         <CheckBoxPreference
-            android:defaultValue="false"
+            android:defaultValue="true"
             android:key="checkbox_enable_commit_text"
             android:summary="@string/summary_enable_commit_text"
             android:title="@string/title_enable_commit_text"
