@@ -111,7 +111,6 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.NotificationManagerCompat;
 import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.preference.PreferenceManager;
 
@@ -395,11 +394,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         // Change volume button behavior
         setVolumeControlStream(AudioManager.STREAM_MUSIC);
-
-        // Take responsibility for our own insets — combined with
-        // windowSoftInputMode=adjustResize, this gives us live IME insets without
-        // the system auto-shrinking our layout when the soft keyboard opens.
-        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
 
         // Inflate the content
         setContentView(R.layout.activity_game);

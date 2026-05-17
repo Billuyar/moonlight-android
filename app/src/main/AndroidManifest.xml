@@ -200,7 +200,7 @@
             android:launchMode="singleTask"
             android:excludeFromRecents="true"
             android:theme="@style/StreamTheme"
-            android:windowSoftInputMode="adjustResize"
+            android:windowSoftInputMode="adjustNothing"
             android:preferMinimalPostProcessing="true">
 
             <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
