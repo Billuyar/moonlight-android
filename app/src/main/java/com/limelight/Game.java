@@ -111,6 +111,7 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.NotificationManagerCompat;
 import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.preference.PreferenceManager;
 
@@ -192,7 +193,15 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     // configured to fit the smaller streamContainer cleanly (e.g. via
     // display_tweak's "Controls bar: Show" option).
     private static final String PREF_PC_KEYS_RESERVE_SPACE = "pc_keys_reserve_space";
-    private boolean pcKeysReserveSpace = false;
+    private boolean pcKeysReserveSpace = true;
+
+    // Master "PC keys" toggle. When on: single-row panel docks at bottom and
+    // reserves stream space, auto-resolution subtracts panel height. When off
+    // (default): no panel, no reserve, stream fills the entire tablet.
+    // Replaces the prior need to coordinate dock-bottom + reserve + visibility
+    // manually.
+    private static final String PREF_PC_KEYS_ENABLED = "pc_keys_enabled";
+    private boolean pcKeysEnabled = false;
 
     private PreferenceConfiguration prefConfig;
     private SharedPreferences tombstonePrefs;
@@ -382,7 +391,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         pcKeysDockBottom = PreferenceManager.getDefaultSharedPreferences(this)
                 .getBoolean(PREF_PC_KEYS_DOCK_BOTTOM, false);
         pcKeysReserveSpace = PreferenceManager.getDefaultSharedPreferences(this)
-                .getBoolean(PREF_PC_KEYS_RESERVE_SPACE, false);
+                .getBoolean(PREF_PC_KEYS_RESERVE_SPACE, true);
+        pcKeysEnabled = PreferenceManager.getDefaultSharedPreferences(this)
+                .getBoolean(PREF_PC_KEYS_ENABLED, false);
+        // Master controls the legacy prefs: keep dock+reserve in sync.
+        if (pcKeysEnabled) {
+            pcKeysDockBottom = true;
+            pcKeysReserveSpace = true;
+        }
         tombstonePrefs = Game.this.getSharedPreferences("DecoderTombstone", 0);
 
         if (prefConfig.fullScreen) {
@@ -396,6 +412,33 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                             View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION |
                             View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
         }
+
+        // On API 30+ the legacy SYSTEM_UI_FLAG_LAYOUT_* hints above are
+        // ignored — the activity still gets shrunk by the status-bar /
+        // display-cutout inset (60px on Tab S9 Ultra, 116px on S10e), so
+        // the streamContainer ends up smaller than full-screen and the
+        // rendered video has letterbox bars even when host and tablet
+        // resolutions match. Tell WindowCompat to NOT auto-apply system
+        // insets so our layout truly occupies the whole window, and set
+        // the display-cutout mode to ALWAYS so the activity can draw
+        // through any cutout (Samsung's manifest-attribute honoring isn't
+        // always reliable; the runtime API call is more dependable).
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            WindowManager.LayoutParams lp = getWindow().getAttributes();
+            lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams
+                    .LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
+            getWindow().setAttributes(lp);
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            WindowManager.LayoutParams lp = getWindow().getAttributes();
+            lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams
+                    .LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            getWindow().setAttributes(lp);
+        }
+        // (Don't hide systemBars via WindowInsetsControllerCompat — when
+        // hidden, getInsets(Type.navigationBars()) returns 0 even though
+        // the soft keyboard still respects the physical nav bar position,
+        // breaking the inset-based alignment of the PC-keys row.)
 
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN);
 
@@ -459,8 +502,50 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             boolean portraitMode = currentOrientation == Configuration.ORIENTATION_PORTRAIT;
             shouldInvertDecoderResolution = portraitMode && prefConfig.autoInvertVideoResolution;
 
+            // Auto resolution: when stored prefs say "auto" (width==0 && height==0),
+            // request the tablet's display dimensions minus PC-keys reserve so the
+            // streamed area maps 1:1 onto the rendered SurfaceView with no client-side
+            // letterbox. The host's source display still has to match that aspect
+            // (handled by display_tweak presets with Controls Bar: Show).
+            if (prefConfig.width == 0 && prefConfig.height == 0) {
+                android.graphics.Point pt = new android.graphics.Point();
+                getWindowManager().getDefaultDisplay().getRealSize(pt);
+                // pt is in CURRENT-orientation coords: pt.x = width, pt.y = height.
+                // PC-keys panel docks at the bottom of the current orientation,
+                // so subtract its height from pt.y regardless of orientation —
+                // in portrait that subtracts from the long axis (2960 → 2840),
+                // in landscape from the short axis (1848 → 1728).
+                int reservedPx = 0;
+                if (pcKeysEnabled) {
+                    float density = getResources().getDisplayMetrics().density;
+                    reservedPx = Math.round(
+                            com.limelight.binding.input.virtual_controller.keyboard.PcKeysOverlayController
+                                    .SINGLE_ROW_HEIGHT_DP * density);
+                }
+                int availW = pt.x;
+                int availH = pt.y - reservedPx;
+                // Store as landscape-canonical (width >= height) so the
+                // existing shouldInvertDecoderResolution swap below produces
+                // the correct request for portrait.
+                prefConfig.width  = Math.max(availW, availH);
+                prefConfig.height = Math.min(availW, availH);
+                LimeLog.info("auto-resolution: screen=" + pt.x + "x" + pt.y
+                        + " density=" + getResources().getDisplayMetrics().density
+                        + " reservedPx=" + reservedPx
+                        + " portrait=" + portraitMode
+                        + " -> canonical " + prefConfig.width + "x" + prefConfig.height);
+            }
+
             displayWidth = shouldInvertDecoderResolution ? prefConfig.height : prefConfig.width;
             displayHeight = shouldInvertDecoderResolution ? prefConfig.width : prefConfig.height;
+
+            // Ask the host to resize its virtual streaming monitor to match the
+            // resolution we're about to request. Bypasses Sunshine's per-app
+            // prep_cmd (which doesn't re-run on reconnect within the same
+            // session) by hitting a tiny dedicated daemon on the host at :47998
+            // before connection start. Best-effort: silently skipped if the
+            // daemon isn't running.
+            requestHostResize(displayWidth, displayHeight);
 
             // Enter landscape unless we're on a square screen
             setPreferredOrientationForActivity();
@@ -1010,6 +1095,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 }
             }
         } catch (Throwable ignored) {}
+
+        // Master "PC keys" pref: when on, auto-show the single-row panel at
+        // stream start so the layout matches what auto-resolution reserved.
+        if (pcKeysEnabled && !isOnExternalDisplay()) {
+            initPcKeysOverlaySingle();
+        }
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -1315,6 +1406,123 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 Toast.LENGTH_SHORT).show();
     }
 
+    // Port of the host-side resize daemon. See /data/screens/scripts/resize_daemon.py.
+    private static final int RESIZE_DAEMON_PORT = 47998;
+
+    // Fire-and-wait POST to the host's resize daemon. Blocks up to 2 seconds.
+    // Called from the main thread during onCreate before the stream connection
+    // starts — quick enough not to be noticeable. Silently skipped if the
+    // daemon isn't reachable.
+    private void requestHostResize(int width, int height) {
+        if (host == null || host.isEmpty() || width <= 0 || height <= 0) return;
+        final String url = "http://" + host + ":" + RESIZE_DAEMON_PORT + "/resize";
+        final String body = "{\"w\":" + width + ",\"h\":" + height + ",\"output\":\"DP-2\"}";
+        Thread t = new Thread(() -> {
+            try {
+                okhttp3.OkHttpClient cli = new okhttp3.OkHttpClient.Builder()
+                        .connectTimeout(2, java.util.concurrent.TimeUnit.SECONDS)
+                        .readTimeout(3, java.util.concurrent.TimeUnit.SECONDS)
+                        .writeTimeout(2, java.util.concurrent.TimeUnit.SECONDS)
+                        .build();
+                okhttp3.Request req = new okhttp3.Request.Builder()
+                        .url(url)
+                        .post(okhttp3.RequestBody.create(body,
+                                okhttp3.MediaType.parse("application/json")))
+                        .build();
+                try (okhttp3.Response resp = cli.newCall(req).execute()) {
+                    LimeLog.info("resize daemon: POST " + width + "x" + height
+                            + " -> " + resp.code());
+                }
+            } catch (Exception e) {
+                LimeLog.info("resize daemon unreachable (" + e + ") — host may keep stale framebuffer");
+            }
+        }, "resize-daemon-call");
+        t.start();
+        try {
+            t.join(3000);  // block up to 3s for resize to complete
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    // Master "PC keys" toggle. When turning on: dock at bottom + reserve space
+    // are forced on, single-row panel becomes visible, the two-row panel is
+    // hidden, and the streamContainer shrinks above the panel. When turning
+    // off: any visible panel is hidden, reserve mode goes off, streamContainer
+    // expands. Auto-resolution at the *next* stream start picks up the new
+    // pref and requests the matching screen area.
+    public void togglePcKeysEnabled() {
+        pcKeysEnabled = !pcKeysEnabled;
+        SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(this);
+        SharedPreferences.Editor ed = sp.edit().putBoolean(PREF_PC_KEYS_ENABLED, pcKeysEnabled);
+        if (pcKeysEnabled) {
+            pcKeysDockBottom = true;
+            pcKeysReserveSpace = true;
+            ed.putBoolean(PREF_PC_KEYS_DOCK_BOTTOM, true)
+              .putBoolean(PREF_PC_KEYS_RESERVE_SPACE, true);
+        }
+        ed.apply();
+        if (pcKeysEnabled) {
+            if (pcKeysOverlayController != null && pcKeysOverlayController.isVisible()) {
+                pcKeysOverlayController.hide();
+            }
+            if (pcKeysOverlaySingleController == null) {
+                initPcKeysOverlaySingle();
+            } else {
+                pcKeysOverlaySingleController.setDockAtBottom(true);
+                if (!pcKeysOverlaySingleController.isVisible()) {
+                    pcKeysOverlaySingleController.show();
+                }
+            }
+        } else {
+            if (pcKeysOverlaySingleController != null && pcKeysOverlaySingleController.isVisible()) {
+                pcKeysOverlaySingleController.hide();
+            }
+            if (pcKeysOverlayController != null && pcKeysOverlayController.isVisible()) {
+                pcKeysOverlayController.hide();
+            }
+        }
+        applyPanelReserveToStreamContainer();
+        // The streamed resolution was fixed at session start; mid-stream
+        // toggling produces letterbox/pillarbox until reconnect. Disconnect
+        // automatically so the next reconnect picks up the new resolution
+        // (the Sunshine prep_cmd will resize the host's virtual display).
+        Toast.makeText(this,
+                pcKeysEnabled ? "PC Keys: On — switching resolution…"
+                              : "PC Keys: Off — switching resolution…",
+                Toast.LENGTH_SHORT).show();
+        relaunchForNewResolution();
+    }
+
+    // Smooth re-stream cycle: tell Sunshine to terminate the running app
+    // session (so a reconnect doesn't /resume at the old resolution), then
+    // finish() this activity and immediately startActivity() the same
+    // Intent — the user lands back in Game.onCreate without having to tap
+    // through the host picker. The connect spinner serves as the
+    // "loading screen" while auto-resolution + the host's resize daemon
+    // do their work.
+    private void relaunchForNewResolution() {
+        final Intent relaunch = getIntent();
+        relaunch.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        // Pre-mark the failure dialog as already-shown so the imminent
+        // connectionTerminated callback (which fires once quitApp closes
+        // the Sunshine session) skips the "Connection terminated" UI.
+        // This is an INTENTIONAL termination on our end, not an error.
+        displayedFailureDialog = true;
+        new Thread(() -> {
+            try { if (httpConn != null) httpConn.quitApp(); }
+            catch (Exception e) { LimeLog.info("quitApp before relaunch failed: " + e); }
+            // Give Sunshine ~400ms to fully tear down so the next /launch
+            // isn't seen as a resume candidate.
+            try { Thread.sleep(400); } catch (InterruptedException ignored) {}
+            runOnUiThread(() -> {
+                finish();
+                startActivity(relaunch);
+                overridePendingTransition(0, 0);
+            });
+        }, "relaunch-for-resolution").start();
+    }
+
 
     //显示隐藏虚拟特殊按键
     public void toggleKeyboardController(){
@@ -1381,8 +1589,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
         }
         else {
-            // Lock to current orientation
-            if (currentOrientation == Configuration.ORIENTATION_LANDSCAPE) {
+            // When the user has enabled auto-orientation, accept any rotation
+            // (landscape ↔ portrait) so the tablet rotation sensor isn't
+            // overridden by us — onConfigurationChanged then triggers a
+            // reconnect so auto-resolution can pick up the new orientation.
+            if (prefConfig.autoOrientation) {
+                setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_FULL_USER);
+            }
+            else if (currentOrientation == Configuration.ORIENTATION_LANDSCAPE) {
                 setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE);
             } else {
                 setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT);
@@ -1393,6 +1607,23 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
+
+        // If the user rotated the tablet AND auto-orient is on, the available
+        // rendering area swapped (e.g. 2960x1848 → 1848x2960). The streamed
+        // resolution was fixed at session start, so we'd letterbox or squish.
+        // Drop the session — the user's next reconnect re-runs auto-resolution
+        // and the Sunshine prep_cmd resizes the host's virtual monitor to
+        // match the new orientation 1:1.
+        if (prefConfig.autoOrientation
+                && newConfig.orientation != currentOrientation
+                && newConfig.orientation != Configuration.ORIENTATION_UNDEFINED
+                && !isOnExternalDisplay()) {
+            Toast.makeText(this,
+                    "Rotated — switching resolution…",
+                    Toast.LENGTH_SHORT).show();
+            relaunchForNewResolution();
+            return;
+        }
 
         // Set requested orientation for possible new screen size
         setPreferredOrientationForActivity();
@@ -1823,11 +2054,22 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         // Don't do setFixedSize since it might not update the view dimensions correctly when entering PiP mode
         if (!(prefConfig.videoScaleMode == PreferenceConfiguration.ScaleMode.STRETCH || aspectRatioMatch)) {
-            // Set the surface to scale based on the aspect ratio of the stream
+            // Set the surface to scale based on the aspect ratio of the stream.
+            // When auto-resolution is active (RESOLUTION_PREF == "auto") the host has
+            // been resized to exactly match the client's request, so the aspects
+            // match and FILL produces identical pixels to FIT — but FILL avoids
+            // the int-truncation 1px shortfall that, combined with layout_gravity
+            // top, leaves a visible black band at the bottom on some devices.
+            String resPref = PreferenceManager.getDefaultSharedPreferences(this)
+                    .getString("list_resolution",
+                            PreferenceConfiguration.RESOLUTION_AUTO);
+            boolean autoMatches = PreferenceConfiguration.RESOLUTION_AUTO.equals(resPref);
             streamContainer.setDesiredAspectRatio((double)displayWidth / (double)displayHeight);
-            streamContainer.setFillDisplay(prefConfig.videoScaleMode == PreferenceConfiguration.ScaleMode.FILL);
+            streamContainer.setFillDisplay(autoMatches
+                    || prefConfig.videoScaleMode == PreferenceConfiguration.ScaleMode.FILL);
             LimeLog.info("surfaceChanged-->"+(double)displayWidth / (double)displayHeight);
-            LimeLog.info("scaleMode-->"+prefConfig.videoScaleMode);
+            LimeLog.info("scaleMode-->"+prefConfig.videoScaleMode
+                    + " fillForAuto=" + autoMatches);
         }
 
         // Set the desired refresh rate that will get passed into setFrameRate() later
@@ -1908,7 +2150,15 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     protected void onDestroy() {
         super.onDestroy();
 
-        instance = null;
+        // Only null the static reference if we're still the current one.
+        // The relaunch-on-rotation / toggle path can have a new Game activity
+        // already running (which set instance=this in its onCreate) by the
+        // time this old activity's onDestroy fires — clearing the static
+        // unconditionally would wipe out the live activity's reference and
+        // break the PC-keys overlay's dispatch path.
+        if (instance == this) {
+            instance = null;
+        }
         timerHandler.removeCallbacksAndMessages(null);
 
         if (prefConfig.enableFullExDisplay) handleDisplayRemoved();
@@ -2284,29 +2534,28 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 return false;
             }
 
-            // Route printable characters through the host-side relay which types
-            // using the host's live keymap. This avoids Sunshine's scancode-based
-            // typing landing on the wrong char on non-US layouts. For non-ASCII
-            // codepoints we route regardless of modifier state (Samsung's
-            // Turkish QWERTY uses Alt as AltGr for ç/ş/ğ; the Alt is NOT a
-            // command modifier the host should see). For ASCII we still respect
-            // command modifiers so Ctrl+C / Alt+Tab / Win+L go through the
-            // streaming scancode path and trigger their normal shortcuts.
-            {
+            // Soft-keyboard printable keys: drop the KeyEvent path so the IME's
+            // commitText is the single source of truth. Samsung Keyboard
+            // dispatches BOTH a raw KeyEvent and a commitText for each letter,
+            // and without this filter the host would type every character
+            // twice (and on space, see "test test" instead of "test "). We
+            // only swallow printable characters (>=0x20) so control keys —
+            // Enter, Tab, Backspace, arrows, Esc, function keys — still flow
+            // through to the scancode path. Command modifiers also bypass
+            // the filter so Ctrl+C / Alt+Tab / Win+L work normally.
+            if (prefConfig.enableCommitText
+                    && event.getDevice() != null
+                    && event.getDevice().isVirtual()) {
                 int unicodeChar = event.getUnicodeChar();
-                if ((unicodeChar & KeyCharacterMap.COMBINING_ACCENT) == 0
-                        && (unicodeChar & KeyCharacterMap.COMBINING_ACCENT_MASK) != 0
-                        && ((char) unicodeChar) >= 0x20
-                        && ((char) unicodeChar) != 0x7F) {
-                    char ch = (char) unicodeChar;
-                    int meta = event.getMetaState();
-                    boolean cmdModifier = (meta & (KeyEvent.META_CTRL_ON
-                            | KeyEvent.META_ALT_ON
-                            | KeyEvent.META_META_ON)) != 0;
-                    if (ch > 0x7F || !cmdModifier) {
-                        sendNonAsciiViaClipboard(String.valueOf(ch));
-                        return true;
-                    }
+                int meta = event.getMetaState();
+                boolean cmdModifier = (meta & (KeyEvent.META_CTRL_ON
+                        | KeyEvent.META_ALT_ON
+                        | KeyEvent.META_META_ON)) != 0;
+                if (unicodeChar >= 0x20
+                        && unicodeChar != 0x7F
+                        && (unicodeChar & KeyCharacterMap.COMBINING_ACCENT) == 0
+                        && !cmdModifier) {
+                    return true;
                 }
             }
 
@@ -2430,7 +2679,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             return false;
         }
 
-        sendNonAsciiViaClipboard(event.getCharacters());
+        if (prefConfig.enableCommitText) {
+            // IME's commitText handles this; skip to avoid double-typing.
+            return true;
+        }
+        com.limelight.binding.input.KeyboardLayoutTranslator
+                .sendAsKeystrokes(conn, event.getCharacters());
         return true;
     }
 
@@ -4518,76 +4772,15 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (!prefConfig.enableCommitText || conn == null) {
             return false;
         }
-        // Route ALL commit-text through the host-side relay (which uses XTest
-        // keysym lookup against the host's current keymap). Sunshine's own
-        // scancode-based typing produces wrong characters on non-US keyboard
-        // layouts — e.g. ASCII "i" lands on keycode 31 which on Turkish Q is
-        // the "ı" key. The daemon picks the actual keycode for each character
-        // on the live keymap, so layout differences disappear.
-        sendNonAsciiViaClipboard(text.toString());
+        // Translate each character into the VK code at its Turkish Q position
+        // on the host, then send via the normal Moonlight protocol. Sunshine
+        // sees regular keystrokes; the host's own keymap produces the right
+        // character. No relay daemon, no clipboard pollution.
+        com.limelight.binding.input.KeyboardLayoutTranslator
+                .sendAsKeystrokes(conn, text.toString());
         return true;
     }
 
-
-    // Plain-HTTP port on the host where the clipboard-relay daemon listens.
-    // See /data/screens/scripts/clipboard_relay.py — the daemon writes its POST
-    // body to the host's X clipboard, working around Sunshine builds that don't
-    // expose a clipboard-write API.
-    private static final int CLIPBOARD_RELAY_PORT = 47999;
-    // Debounce window for batching rapid non-ASCII characters into one paste.
-    private static final long NON_ASCII_FLUSH_DELAY_MS = 120;
-    // Minimum time between consecutive clipboard-paste operations so each
-    // Ctrl+V actually lands on the host before the next clipboard overwrite.
-    private static final long NON_ASCII_PASTE_INTERVAL_MS = 250;
-
-    private final StringBuilder nonAsciiPending = new StringBuilder();
-    private final Handler nonAsciiHandler = new Handler(Looper.getMainLooper());
-    private final Runnable nonAsciiFlush = this::flushNonAsciiBatch;
-    // Single-thread executor: serialises POST + Ctrl+V so consecutive Turkish
-    // characters don't race each other's clipboards.
-    private final java.util.concurrent.ExecutorService nonAsciiExecutor =
-            java.util.concurrent.Executors.newSingleThreadExecutor();
-
-    private void sendNonAsciiViaClipboard(final String text) {
-        if (httpConn == null || text == null || text.isEmpty()) {
-            return;
-        }
-        // Append to the pending batch and (re)schedule a flush. Multiple rapid
-        // characters within NON_ASCII_FLUSH_DELAY_MS become a single paste.
-        nonAsciiPending.append(text);
-        nonAsciiHandler.removeCallbacks(nonAsciiFlush);
-        nonAsciiHandler.postDelayed(nonAsciiFlush, NON_ASCII_FLUSH_DELAY_MS);
-    }
-
-    private void flushNonAsciiBatch() {
-        if (nonAsciiPending.length() == 0 || httpConn == null) {
-            return;
-        }
-        final String batch = nonAsciiPending.toString();
-        nonAsciiPending.setLength(0);
-        // Update the local Android clipboard for visibility / manual re-paste.
-        try {
-            clipboardManager.setPrimaryClip(ClipData.newPlainText(CLIPBOARD_IDENTIFIER, batch));
-        } catch (Exception ignored) {
-        }
-        nonAsciiExecutor.submit(() -> {
-            try {
-                if (!httpConn.sendClipboardToRelay(CLIPBOARD_RELAY_PORT, batch)) {
-                    LimeLog.warning("Non-ASCII relay did not accept (is the daemon running on the host?)");
-                    return;
-                }
-                // The daemon types each character directly via XTest, so we
-                // don't need to send a Ctrl+V over the streaming protocol.
-                // Still pace consecutive batches so rapid typing doesn't
-                // overwhelm the host's X server.
-                Thread.sleep(NON_ASCII_PASTE_INTERVAL_MS);
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-            } catch (Exception e) {
-                LimeLog.warning("Non-ASCII relay POST failed: " + e);
-            }
-        });
-    }
 
     @Override
     public boolean handleDeleteSurroundingText(int beforeLength, int afterLength) {

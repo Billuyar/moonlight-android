@@ -45,6 +45,12 @@ public class PcKeysOverlayController {
         MODIFIER_KEY_CODES.add(KeyEvent.KEYCODE_META_RIGHT);
     }
 
+    // Bottom-dock panel heights as constructed in Game.java. Exposed so the
+    // auto-resolution path can reserve matching space when computing the
+    // streaming resolution at stream start.
+    public static final int TWO_ROW_HEIGHT_DP = 120;
+    public static final int SINGLE_ROW_HEIGHT_DP = 60;
+
     private final Context context;
     private final PreferenceConfiguration prefConfig;
     private final FrameLayout frameLayout;
@@ -60,6 +66,13 @@ public class PcKeysOverlayController {
     // at bottom and the IME is up, the panel sits above the keyboard.
     private boolean dockAtBottom = false;
     private int imeBottomInset = 0;
+    // Cached side insets (nav bar + cutout) captured before the IME becomes
+    // visible. When the IME is up Android logically replaces the nav-bar
+    // inset with the IME inset, so getInsets(Type.navigationBars()) returns
+    // 0 — re-reading would make the row stretch past the nav bar. We
+    // capture once on first layout and reuse.
+    private int cachedLeftInset = -1;
+    private int cachedRightInset = -1;
 
     public interface VisibilityListener { void onVisibilityChanged(); }
     private VisibilityListener visibilityListener;
@@ -81,6 +94,25 @@ public class PcKeysOverlayController {
         this.heightDp = heightDp;
         this.overlayView = (LinearLayout) LayoutInflater.from(context)
                 .inflate(layoutResId, null);
+        // Receive WindowInsets when the parent dispatches them — this is the
+        // earliest reliable moment to capture nav-bar + cutout insets (the
+        // values aren't available at construction time).
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(
+                overlayView, (v, insets) -> {
+            int typeMask = androidx.core.view.WindowInsetsCompat.Type.navigationBars()
+                    | androidx.core.view.WindowInsetsCompat.Type.displayCutout();
+            androidx.core.graphics.Insets ins = insets.getInsets(typeMask);
+            if (ins.left > 0 || ins.right > 0) {
+                boolean changed = ins.left != cachedLeftInset
+                        || ins.right != cachedRightInset;
+                cachedLeftInset = ins.left;
+                cachedRightInset = ins.right;
+                if (changed && overlayView.getParent() != null) {
+                    refreshLayout();
+                }
+            }
+            return insets;
+        });
         bindKeys();
     }
 
@@ -92,6 +124,17 @@ public class PcKeysOverlayController {
                 if (event.getAction() == MotionEvent.ACTION_UP
                         || event.getAction() == MotionEvent.ACTION_CANCEL) {
                     hide();
+                }
+                return true;
+            }
+            // "ime" tag: toggle the Android soft keyboard (Samsung Keyboard
+            // on Bill's setup). Fires on ACTION_UP so the haptic feels right
+            // and we don't get flicker.
+            if (TextUtils.equals("ime", tag)) {
+                if (event.getAction() == MotionEvent.ACTION_UP
+                        || event.getAction() == MotionEvent.ACTION_CANCEL) {
+                    if (Game.instance != null) Game.instance.toggleKeyboard();
+                    haptic(v, false);
                 }
                 return true;
             }
@@ -208,17 +251,54 @@ public class PcKeysOverlayController {
         if (overlayView.getParent() != null) {
             frameLayout.removeView(overlayView);
         }
-        DisplayMetrics screen = context.getResources().getDisplayMetrics();
-        int width = screen.widthPixels;
         int height = dip2px(heightDp);
-        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(width, height);
+        // Match the soft keyboard's frame: it respects nav-bar + display-
+        // cutout insets even when systemBars are hidden via the
+        // WindowInsetsController (Samsung One UI re-applies them when an
+        // overlay is added). Apply the same insets as side margins on the
+        // PC-keys row so it aligns with the keyboard rather than extending
+        // edge-to-edge over the nav bar areas.
+        // Capture nav-bar + cutout side insets only when we see real values.
+        // First refreshLayout often runs before the window is fully measured
+        // (returns 0,0); IME-up state returns 0 for nav bars because Android
+        // logically replaces them with the IME inset. Only the moment we
+        // catch real non-zero readings is reliable — once captured, reuse.
+        try {
+            androidx.core.view.WindowInsetsCompat insets =
+                    androidx.core.view.ViewCompat.getRootWindowInsets(frameLayout);
+            if (insets != null) {
+                int typeMask = androidx.core.view.WindowInsetsCompat.Type.navigationBars()
+                             | androidx.core.view.WindowInsetsCompat.Type.displayCutout();
+                androidx.core.graphics.Insets ins = insets.getInsets(typeMask);
+                if (ins.left > 0 || ins.right > 0) {
+                    cachedLeftInset = ins.left;
+                    cachedRightInset = ins.right;
+                }
+            }
+        } catch (Throwable ignored) {}
+        int leftInset = Math.max(0, cachedLeftInset);
+        int rightInset = Math.max(0, cachedRightInset);
+        // If we still haven't captured (e.g., very first stream session after
+        // app launch and refreshLayout fires before the window settles),
+        // schedule a re-layout once the window has insets.
+        if (cachedLeftInset < 0 || cachedRightInset < 0) {
+            overlayView.post(this::refreshLayout);
+        }
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, height);
+        params.leftMargin = leftInset;
+        params.rightMargin = rightInset;
         if (dockAtBottom) {
-            params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+            params.gravity = Gravity.BOTTOM | Gravity.START;
             params.bottomMargin = imeBottomInset;
         } else {
-            params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+            params.gravity = Gravity.TOP | Gravity.START;
         }
-        overlayView.setAlpha(prefConfig.oscKeyboardOpacity / 100f);
+        // PC keys row is always fully opaque — the streamed content showing
+        // through partial transparency reads as "gaps between buttons" and
+        // is visually confusing. The OSC-keyboard opacity pref still applies
+        // to the on-screen virtual keyboard, not this row.
+        overlayView.setAlpha(1f);
         frameLayout.addView(overlayView, params);
     }
 

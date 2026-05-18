@@ -256,10 +256,12 @@ public class GameMenu implements Game.GameMenuCallbacks {
         }
         options.add(new MenuOption(getString(R.string.game_menu_toggle_virtual_keyboard_model), true, game::toggleFullKeyboard));
         if (!game.isOnExternalDisplay()) {
-            options.add(new MenuOption(getString(R.string.game_menu_toggle_pc_keys_overlay), true, game::togglePcKeysOverlay));
-            options.add(new MenuOption(getString(R.string.game_menu_toggle_pc_keys_overlay_single), true, game::togglePcKeysOverlaySingle));
-            options.add(new MenuOption(getString(R.string.game_menu_toggle_pc_keys_overlay_dock_position), true, game::togglePcKeysOverlayDockPosition));
-            options.add(new MenuOption(getString(R.string.game_menu_toggle_pc_keys_reserve_space), true, game::togglePcKeysOverlayReserveSpace));
+            // Master "PC keys" toggle: single-row panel docked at bottom +
+            // reserved stream space + host resolution adjusted to fit.
+            // Triggers a quick auto-reconnect so the host's framebuffer is
+            // reshaped before capture resumes — the keys row sits in its
+            // own area, not on top of the stream.
+            options.add(new MenuOption("Toggle PC keys", true, game::togglePcKeysEnabled));
         }
         options.add(new MenuOption(getString(R.string.game_menu_task_manager), true, () -> sendKeys(new short[]{KeyboardTranslator.VK_LCONTROL, KeyboardTranslator.VK_LSHIFT, KeyboardTranslator.VK_ESCAPE})));
 

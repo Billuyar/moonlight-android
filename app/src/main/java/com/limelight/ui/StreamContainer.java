@@ -187,18 +187,23 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         if (!commitTextEnabled) {
             return super.onCreateInputConnection(outAttrs);
         }
-        outAttrs.inputType = android.text.InputType.TYPE_CLASS_TEXT;
-        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI;
-        return new BaseInputConnection(this, false) {
+        // NO_SUGGESTIONS asks IMEs (notably Samsung Keyboard) to skip predictive
+        // composition. NO_PERSONALIZED_LEARNING tells them not to remember typed
+        // text for autocomplete.
+        outAttrs.inputType = android.text.InputType.TYPE_CLASS_TEXT
+                | android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;
+        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI
+                | EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING;
+        return new StreamingInputConnection(this, new StreamingInputConnection.Sink() {
             @Override
-            public boolean commitText(CharSequence text, int newCursorPosition) {
-                return mInputCallbacks != null && mInputCallbacks.handleCommitText(text) || super.commitText(text, newCursorPosition);
+            public boolean handleCommitText(CharSequence text) {
+                return mInputCallbacks != null && mInputCallbacks.handleCommitText(text);
             }
             @Override
-            public boolean deleteSurroundingText(int beforeLength, int afterLength) {
-                return mInputCallbacks != null && mInputCallbacks.handleDeleteSurroundingText(beforeLength, afterLength) || super.deleteSurroundingText(beforeLength, afterLength);
+            public boolean handleDeleteSurroundingText(int beforeLength, int afterLength) {
+                return mInputCallbacks != null && mInputCallbacks.handleDeleteSurroundingText(beforeLength, afterLength);
             }
-        };
+        });
     }
 
     public void setOnSurfaceAvailable(Runnable callback) {

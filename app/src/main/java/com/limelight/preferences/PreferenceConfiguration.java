@@ -138,7 +138,7 @@ public class PreferenceConfiguration {
 
     private static final String CHECKBOX_ENABLE_COMMIT_TEXT = "checkbox_enable_commit_text";
 
-    static final String DEFAULT_RESOLUTION = "1280x720";
+    static final String DEFAULT_RESOLUTION = "auto"; // = RESOLUTION_AUTO
     static final String DEFAULT_FPS = "60";
     private static final boolean DEFAULT_ENABLE_ULTRA_LOW_LATENCY = false;
     private static final boolean DEFAULT_ENFORCE_DISPLAY_MODE = false;
@@ -225,6 +225,9 @@ public class PreferenceConfiguration {
     public static final String RES_1080P = "1920x1080";
     public static final String RES_1440P = "2560x1440";
     public static final String RES_4K = "3840x2160";
+    // Sentinel — the actual width/height get resolved at stream start from
+    // the tablet's display metrics. See Game.onCreate() auto-resolution block.
+    public static final String RESOLUTION_AUTO = "auto";
     public static final String RES_NATIVE = "Native";
 
     public int width, height, bitrate;
@@ -467,10 +470,12 @@ public class PreferenceConfiguration {
     }
 
     private static int getWidthFromResolutionString(String resString) {
+        if (RESOLUTION_AUTO.equals(resString)) return 0;
         return Integer.parseInt(resString.split("x")[0]);
     }
 
     private static int getHeightFromResolutionString(String resString) {
+        if (RESOLUTION_AUTO.equals(resString)) return 0;
         return Integer.parseInt(resString.split("x")[1]);
     }
 
@@ -493,8 +498,17 @@ public class PreferenceConfiguration {
     }
 
     public static int getDefaultBitrate(String resString, String fpsString) {
-        int width = getWidthFromResolutionString(resString);
-        int height = getHeightFromResolutionString(resString);
+        int width, height;
+        if (RESOLUTION_AUTO.equals(resString)) {
+            // Auto resolution: bitrate UI runs before we know the actual size,
+            // so size by 1080p as a sane default. Actual streaming uses the
+            // tablet's display dimensions resolved in Game.onCreate().
+            width = 1920;
+            height = 1080;
+        } else {
+            width = getWidthFromResolutionString(resString);
+            height = getHeightFromResolutionString(resString);
+        }
         int fps = Math.round(Float.parseFloat(fpsString));
 
         // This logic is shamelessly stolen from Moonlight Qt:
@@ -788,8 +802,10 @@ private static int getFramePacingValue(Context context) {
             // Use the new preference location
             String resStr = prefs.getString(RESOLUTION_PREF_STRING, PreferenceConfiguration.DEFAULT_RESOLUTION);
 
-            // Convert legacy resolution strings to the new style
-            if (!resStr.contains("x")) {
+            // Convert legacy resolution strings to the new style (skip "auto"
+            // — that's our explicit "match this device" sentinel and is
+            // resolved at stream start, not at preference read).
+            if (!resStr.contains("x") && !RESOLUTION_AUTO.equals(resStr)) {
                 resStr = PreferenceConfiguration.convertFromLegacyResolutionString(resStr);
                 prefs.edit().putString(RESOLUTION_PREF_STRING, resStr).apply();
             }

@@ -936,45 +936,4 @@ public class NvHTTP {
         }
     }
 
-    /**
-     * POST the given text to a plain-HTTP clipboard-relay daemon running on the
-     * host (see /data/screens/scripts/clipboard_relay.py). Used as a workaround
-     * for Sunshine versions that don't expose a clipboard-write API: the relay
-     * sets the host's X clipboard via xclip, then the client sends Ctrl+V via
-     * the regular Moonlight protocol to paste the text.
-     *
-     * @param relayPort  TCP port the relay listens on (typically 47999)
-     * @param content    UTF-8 text to push to host clipboard
-     * @return true on HTTP 2xx, false on any other status / network error
-     */
-    public boolean sendClipboardToRelay(int relayPort, String content) {
-        HttpUrl url = new HttpUrl.Builder()
-                .scheme("http")
-                .host(baseUrlHttp.host())
-                .port(relayPort)
-                .addPathSegment("clipboard")
-                .build();
-        // Use a fresh plain-HTTP OkHttpClient — httpClientLongConnectTimeout is
-        // pre-configured for Sunshine's mutual-TLS handshake and refuses cleartext.
-        okhttp3.OkHttpClient relayClient = new okhttp3.OkHttpClient.Builder()
-                .connectTimeout(2, java.util.concurrent.TimeUnit.SECONDS)
-                .readTimeout(2, java.util.concurrent.TimeUnit.SECONDS)
-                .writeTimeout(2, java.util.concurrent.TimeUnit.SECONDS)
-                .build();
-        try {
-            okhttp3.Request request = new okhttp3.Request.Builder()
-                    .url(url)
-                    .post(RequestBody.create(content, MediaType.parse("text/plain; charset=utf-8")))
-                    .build();
-            try (okhttp3.Response response = relayClient.newCall(request).execute()) {
-                if (!response.isSuccessful()) {
-                    com.limelight.LimeLog.warning("Clipboard relay POST returned " + response.code() + " " + response.message() + " from " + url);
-                }
-                return response.isSuccessful();
-            }
-        } catch (IOException e) {
-            com.limelight.LimeLog.warning("Clipboard relay POST to " + url + " failed: " + e);
-            return false;
-        }
-    }
 }

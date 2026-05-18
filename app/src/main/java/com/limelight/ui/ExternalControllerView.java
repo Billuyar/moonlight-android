@@ -61,27 +61,24 @@ public class ExternalControllerView extends FrameLayout {
             return super.onCreateInputConnection(outAttrs);
         }
 
-        // Basic text editor flags – we don't need extract UI or enter action
-        outAttrs.inputType = android.text.InputType.TYPE_CLASS_TEXT;
-        outAttrs.imeOptions = android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI;
+        // NO_SUGGESTIONS asks IMEs (notably Samsung Keyboard) to skip predictive
+        // composition. NO_PERSONALIZED_LEARNING tells them not to remember typed
+        // text for autocomplete.
+        outAttrs.inputType = android.text.InputType.TYPE_CLASS_TEXT
+                | android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;
+        outAttrs.imeOptions = android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
+                | android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING;
 
-        return new android.view.inputmethod.BaseInputConnection(this, false) {
+        return new StreamingInputConnection(this, new StreamingInputConnection.Sink() {
             @Override
-            public boolean commitText(CharSequence text, int newCursorPosition) {
-                if (inputCallbacks != null && inputCallbacks.handleCommitText(text)) {
-                    return true;
-                }
-                return super.commitText(text, newCursorPosition);
+            public boolean handleCommitText(CharSequence text) {
+                return inputCallbacks != null && inputCallbacks.handleCommitText(text);
             }
-
             @Override
-            public boolean deleteSurroundingText(int beforeLength, int afterLength) {
-                if (inputCallbacks != null && inputCallbacks.handleDeleteSurroundingText(beforeLength, afterLength)) {
-                    return true;
-                }
-                return super.deleteSurroundingText(beforeLength, afterLength);
+            public boolean handleDeleteSurroundingText(int beforeLength, int afterLength) {
+                return inputCallbacks != null && inputCallbacks.handleDeleteSurroundingText(beforeLength, afterLength);
             }
-        };
+        });
     }
 
     public interface InputCallbacks {
