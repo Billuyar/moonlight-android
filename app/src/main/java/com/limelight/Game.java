@@ -226,6 +226,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     private InputCaptureProvider inputCaptureProvider;
     private int modifierFlags = 0;
+    // Sticky Alt+Tab window switcher: 4-finger tap sends Alt-down + Tab tap so
+    // GNOME's switcher appears and stays visible (Alt is held by us, not by the
+    // user). Tab/Shift+Tab/arrows on the soft keyboard navigate the switcher
+    // while Alt remains pressed via modifierFlags. Enter or a stream tap commits
+    // (sends Alt-up), Esc cancels (Esc tap then Alt-up). Cleared on stopConnection.
+    private boolean stickyAltActive = false;
     private boolean grabbedInput = true;
     private boolean cursorVisible = false;
     private boolean isPanZoomMode = false;
@@ -245,6 +251,17 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private boolean isDragging = false;
     private float lastTouchDownX, lastTouchDownY;
 
+    // Y coord (on-screen pixels) of the user's most recent single-finger
+    // tap on the stream — committed only when a gesture actually ends as a
+    // single-finger touch (so 3/4/5-finger gestures don't overwrite it).
+    // When the IME opens we treat this as the focused-text-field row and
+    // scroll the stream up to keep it above the keyboard. < 0 = unknown.
+    private float lastTapY = -1f;
+    // Per-gesture scratch state used to decide what counts as a "single-finger
+    // tap". pendingTapY is the first-finger ACTION_DOWN Y; gestureMaxPointers
+    // is the highest pointer count we ever saw during this gesture.
+    private float pendingTapY = -1f;
+    private int gestureMaxPointers = 0;
     private long lastAbsTouchUpTime = 0;
     private long lastAbsTouchDownTime = 0;
     private float lastAbsTouchUpX, lastAbsTouchUpY;
@@ -573,6 +590,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             if (!isOnExternalDisplay()) {
                 int newInset = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom;
                 if (newInset != imeBottomInset) {
+                    boolean opening = imeBottomInset == 0 && newInset > 0;
                     boolean closing = imeBottomInset > 0 && newInset == 0;
                     imeBottomInset = newInset;
 
@@ -584,6 +602,16 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         if (closing) {
                             panZoomHandler.resetToFit();
                         }
+                    }
+                    // On IME open, scroll the stream so the user's last tap
+                    // sits above the keyboard. Brief delay so the inset is
+                    // settled before we measure parentHeight - imeBottomInset.
+                    if (opening && lastTapY >= 0 && panZoomHandler != null) {
+                        final float tapY = lastTapY;
+                        final int inset = newInset;
+                        streamContainer.postDelayed(
+                                () -> panZoomHandler.scrollOnScreenPointAboveIme(tapY, inset),
+                                120);
                     }
                     if (pcKeysOverlayController != null) {
                         pcKeysOverlayController.setImeBottomInset(newInset);
@@ -1004,6 +1032,17 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
                 // Der Decoder erhält die jeweils aktive Oberfläche vom Container
                 decoderRenderer.setRenderTarget(streamContainer.getSurface());
+
+                // Ensure the host's dual-monitor layout is up before we kick
+                // off /launch (or /resume). The earlier onCreate-time call
+                // can race: when Sunshine handles /resume it doesn't fire
+                // prep-cmd, so without re-asserting here the host stays in
+                // its suspended single-monitor state and Sunshine captures
+                // DP-0 instead of DP-2. Blocking up to 3s is acceptable —
+                // the stream connection takes longer than that anyway.
+                LimeLog.info("requestHostResize before conn.start: "
+                        + displayWidth + "x" + displayHeight);
+                requestHostResize(displayWidth, displayHeight);
 
                 // Starten Sie die NvConnection
                 conn.start(new AndroidAudioRenderer(Game.this, prefConfig.playHostAudio),
@@ -1426,7 +1465,15 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }, "resize-daemon-call");
         t.start();
         try {
-            t.join(3000);  // block up to 3s for resize to complete
+            t.join(5000);  // block up to 5s for resize to complete
+            // Extra settle delay: nvidia + Mutter report DP-2 within ~500ms
+            // of the resize POST, but X's XRRGetScreenResources (which
+            // Sunshine queries on /resume to pick its capture target)
+            // lags another ~2s. Without this sleep, /resume's enumeration
+            // sees only DP-0 and Sunshine captures the physical monitor
+            // instead of the virtual stream target. 2s is empirically
+            // enough; the stream connection setup takes longer anyway.
+            Thread.sleep(2000);
         } catch (InterruptedException ignored) {
             Thread.currentThread().interrupt();
         }
@@ -2467,6 +2514,21 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     public boolean handleKeyDown(KeyEvent event) {
+        // Sticky Alt+Tab switcher: Enter commits, Esc cancels. Everything else
+        // (Tab, Shift+Tab, arrows) falls through so the host's switcher can
+        // consume it with Alt still held.
+        if (stickyAltActive) {
+            int kc = event.getKeyCode();
+            if (kc == KeyEvent.KEYCODE_ENTER || kc == KeyEvent.KEYCODE_NUMPAD_ENTER) {
+                commitStickyAlt();
+                return true;
+            }
+            if (kc == KeyEvent.KEYCODE_ESCAPE) {
+                cancelStickyAlt();
+                return true;
+            }
+        }
+
         // Pass-through virtual navigation keys
         if ((event.getFlags() & KeyEvent.FLAG_VIRTUAL_HARD_KEY) != 0) {
             return false;
@@ -2669,6 +2731,53 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         com.limelight.binding.input.KeyboardLayoutTranslator
                 .sendAsKeystrokes(conn, event.getCharacters());
         return true;
+    }
+
+    // Open the GNOME window switcher and keep it open. Sends Alt-down then a
+    // Tab tap; Alt stays held via modifierFlags so subsequent soft-keyboard
+    // input (Tab, Shift+Tab, arrows) arrives at the host with Alt set and
+    // navigates the switcher. commitStickyAlt() / cancelStickyAlt() must run
+    // before normal interaction resumes.
+    private void enterStickyAltTab() {
+        if (conn == null || !connected || stickyAltActive) return;
+        modifierFlags |= KeyboardPacket.MODIFIER_ALT;
+        conn.sendKeyboardInput((short) KeyboardTranslator.VK_LMENU, KeyboardPacket.KEY_DOWN,
+                (byte) modifierFlags, (byte) 0);
+        conn.sendKeyboardInput((short) KeyboardTranslator.VK_TAB, KeyboardPacket.KEY_DOWN,
+                (byte) modifierFlags, (byte) 0);
+        conn.sendKeyboardInput((short) KeyboardTranslator.VK_TAB, KeyboardPacket.KEY_UP,
+                (byte) modifierFlags, (byte) 0);
+        stickyAltActive = true;
+    }
+
+    // Release the sticky Alt so GNOME's switcher commits to the currently
+    // highlighted window. Safe to call when not in sticky mode.
+    private void commitStickyAlt() {
+        if (!stickyAltActive) return;
+        modifierFlags &= ~KeyboardPacket.MODIFIER_ALT;
+        if (conn != null) {
+            conn.sendKeyboardInput((short) KeyboardTranslator.VK_LMENU, KeyboardPacket.KEY_UP,
+                    (byte) modifierFlags, (byte) 0);
+        }
+        stickyAltActive = false;
+    }
+
+    // Cancel the switcher: tap Esc with Alt still held (switcher dismisses
+    // without committing), then release Alt.
+    private void cancelStickyAlt() {
+        if (!stickyAltActive) return;
+        if (conn != null) {
+            conn.sendKeyboardInput((short) KeyboardTranslator.VK_ESCAPE, KeyboardPacket.KEY_DOWN,
+                    (byte) modifierFlags, (byte) 0);
+            conn.sendKeyboardInput((short) KeyboardTranslator.VK_ESCAPE, KeyboardPacket.KEY_UP,
+                    (byte) modifierFlags, (byte) 0);
+        }
+        modifierFlags &= ~KeyboardPacket.MODIFIER_ALT;
+        if (conn != null) {
+            conn.sendKeyboardInput((short) KeyboardTranslator.VK_LMENU, KeyboardPacket.KEY_UP,
+                    (byte) modifierFlags, (byte) 0);
+        }
+        stickyAltActive = false;
     }
 
     public void sendKeys(short[] keys) {
@@ -3536,6 +3645,46 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         return true;
                     }
 
+                    // Sticky Alt+Tab: route a single-finger tap to the host as
+                    // an explicit mouse click at the tap coords while Alt is
+                    // still held. GNOME's switcher captures input via a popup
+                    // grab, so the click goes to the switcher first:
+                    //   * tap on a window thumbnail -> switcher activates that
+                    //     window and dismisses;
+                    //   * tap outside the switcher -> switcher dismisses
+                    //     without selecting.
+                    // Release Alt after a short delay so it reaches the host
+                    // after GNOME has processed the click (an Alt-up that lands
+                    // before the click would commit to the currently-highlighted
+                    // window instead of the one the user actually tapped).
+                    if (stickyAltActive
+                            && event.getActionMasked() == MotionEvent.ACTION_DOWN
+                            && event.getPointerCount() == 1) {
+                        short tx = (short) event.getX(0);
+                        short ty = (short) event.getY(0);
+                        short sw = (short) streamContainer.getWidth();
+                        short sh = (short) streamContainer.getHeight();
+                        if (sw > 0 && sh > 0 && conn != null) {
+                            conn.sendMousePosition(tx, ty, sw, sh);
+                            conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_LEFT);
+                            conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_LEFT);
+                        }
+                        // Mark inactive immediately so subsequent touches don't
+                        // re-fire this path while we wait for the delayed Alt-up.
+                        stickyAltActive = false;
+                        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                            if (conn != null) {
+                                conn.sendKeyboardInput(
+                                        (short) KeyboardTranslator.VK_LMENU,
+                                        KeyboardPacket.KEY_UP,
+                                        (byte) (modifierFlags & ~KeyboardPacket.MODIFIER_ALT),
+                                        (byte) 0);
+                            }
+                            modifierFlags &= ~KeyboardPacket.MODIFIER_ALT;
+                        }, 150);
+                        return true;
+                    }
+
                     // While the soft keyboard is up, two-finger drag pans the
                     // stream so the user can slide the text-cursor area out from
                     // behind the keyboard. Pan only — no pinch-zoom, since the
@@ -3546,6 +3695,33 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     if (imeBottomInset > 0 && event.getPointerCount() >= 2) {
                         panZoomHandler.handlePanOnlyTouchEvent(event);
                         return true;
+                    }
+
+                    // Per-gesture tap tracking. The "tap that focused the text
+                    // field" is the only one we want as the scroll target —
+                    // first-finger-down of a 3/4/5-finger gesture (which
+                    // toggles the keyboard / opens menus / sticky-Alt) must
+                    // NOT overwrite it. We capture the first DOWN tentatively
+                    // in pendingTapY and only commit it to lastTapY when the
+                    // gesture ends having never exceeded one pointer.
+                    {
+                        int a = event.getActionMasked();
+                        int pc = event.getPointerCount();
+                        if (a == MotionEvent.ACTION_DOWN) {
+                            pendingTapY = event.getY(0);
+                            gestureMaxPointers = 1;
+                        } else if (a == MotionEvent.ACTION_POINTER_DOWN) {
+                            if (pc > gestureMaxPointers) gestureMaxPointers = pc;
+                        } else if (a == MotionEvent.ACTION_UP) {
+                            if (gestureMaxPointers == 1 && pendingTapY >= 0) {
+                                lastTapY = pendingTapY;
+                            }
+                            pendingTapY = -1f;
+                            gestureMaxPointers = 0;
+                        } else if (a == MotionEvent.ACTION_CANCEL) {
+                            pendingTapY = -1f;
+                            gestureMaxPointers = 0;
+                        }
                     }
 
                     if (isPanZoomMode) {
@@ -3713,7 +3889,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                             toggleKeyboard();
                             return true;
                         } else if (currentEventTime - fourFingerDownTime < FOUR_FINGER_TAP_THRESHOLD) {
-                            toggleFullKeyboard();
+                            enterStickyAltTab();
                             return true;
                         } else if (currentEventTime - fiveFingerDownTime < FIVE_FINGER_TAP_THRESHOLD) {
                             if(prefConfig.enableBackMenu) {
@@ -3787,7 +3963,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     fiveFingerDownTime = 0;
                     break;
                 } else if (pointerCount == 4 && fourFingerDownTime > 0 && currentEventTime - fourFingerDownTime < FOUR_FINGER_TAP_THRESHOLD) {
-                    toggleFullKeyboard();
+                    enterStickyAltTab();
                     fourFingerDownTime = 0;
                     break;
                 } else if (pointerCount == 3 && threeFingerDownTime > 0 && currentEventTime - threeFingerDownTime < THREE_FINGER_TAP_THRESHOLD) {
@@ -3914,6 +4090,17 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     private void stopConnection() {
         if (connecting || connected) {
+            // If the user disconnects mid-switch, release the sticky Alt so the
+            // host doesn't end up with a stuck modifier next session.
+            if (stickyAltActive && conn != null) {
+                try {
+                    conn.sendKeyboardInput((short) KeyboardTranslator.VK_LMENU,
+                            KeyboardPacket.KEY_UP, (byte) 0, (byte) 0);
+                } catch (Exception ignored) { }
+                modifierFlags &= ~KeyboardPacket.MODIFIER_ALT;
+                stickyAltActive = false;
+            }
+
             connecting = connected = false;
             updatePipAutoEnter();
 

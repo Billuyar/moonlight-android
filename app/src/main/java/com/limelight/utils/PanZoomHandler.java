@@ -214,4 +214,29 @@ public class PanZoomHandler {
     public float getScaleFactor() { return scaleFactor; }
     public float getChildX() { return childX; }
     public float getChildY() { return childY; }
+
+    /**
+     * Auto-scroll the stream so an on-screen Y coordinate (the user's last
+     * single-finger tap, used as a proxy for the focused text field) sits
+     * above the IME with a small padding. Does nothing if the point is
+     * already comfortably above the keyboard, so a re-open with the cursor
+     * already visible doesn't disturb the user's pan.
+     *
+     * @param onScreenY tap Y in streamContainer / on-screen pixels
+     * @param imeInset  current IME inset in pixels
+     */
+    public void scrollOnScreenPointAboveIme(float onScreenY, int imeInset) {
+        if (imeInset <= 0) return;
+        updateDimensions();
+        float visibleBottom = parentHeight - imeInset;
+        if (visibleBottom <= 0) return;
+        float padding = Math.min(40f, visibleBottom * 0.1f);
+
+        if (onScreenY <= visibleBottom - padding) return;  // already visible
+
+        float delta = onScreenY - (visibleBottom - padding);
+        childY -= delta;
+        streamView.setY(childY);
+        constrainToBounds();
+    }
 }
