@@ -240,10 +240,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     // the user can pan the stream up to reach content hidden behind the keyboard,
     // and into the docked PC-keys overlay so it sits above the keyboard.
     private int imeBottomInset = 0;
-    // Previous pan/zoom mode state — when the IME opens we auto-enable pan/zoom
-    // mode so two-finger drag pans the stream out from behind the keyboard. On
-    // close we restore the previous state and reset the stream to 1:1 fit.
-    private boolean panZoomBeforeIme = false;
 
     private boolean pendingDrag = false;
     private boolean isDragging = false;
@@ -503,37 +499,25 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             shouldInvertDecoderResolution = portraitMode && prefConfig.autoInvertVideoResolution;
 
             // Auto resolution: when stored prefs say "auto" (width==0 && height==0),
-            // request the tablet's display dimensions minus PC-keys reserve so the
-            // streamed area maps 1:1 onto the rendered SurfaceView with no client-side
-            // letterbox. The host's source display still has to match that aspect
-            // (handled by display_tweak presets with Controls Bar: Show).
+            // request the tablet's FULL display dimensions. PC-keys reserve is now
+            // a client-side concern only — when the panel is docked, the
+            // StreamContainer is shrunk by reservedPx and the GL composite handles
+            // the small (~4%) vertical scaling. The host framebuffer stays at the
+            // tablet's native size so a PC-keys toggle doesn't force a Sunshine
+            // reconnect / Mutter blank / gnome-shell restart.
             if (prefConfig.width == 0 && prefConfig.height == 0) {
                 android.graphics.Point pt = new android.graphics.Point();
                 getWindowManager().getDefaultDisplay().getRealSize(pt);
-                // pt is in CURRENT-orientation coords: pt.x = width, pt.y = height.
-                // PC-keys panel docks at the bottom of the current orientation,
-                // so subtract its height from pt.y regardless of orientation —
-                // in portrait that subtracts from the long axis (2960 → 2840),
-                // in landscape from the short axis (1848 → 1728).
-                int reservedPx = 0;
-                if (pcKeysEnabled) {
-                    float density = getResources().getDisplayMetrics().density;
-                    reservedPx = Math.round(
-                            com.limelight.binding.input.virtual_controller.keyboard.PcKeysOverlayController
-                                    .SINGLE_ROW_HEIGHT_DP * density);
-                }
-                int availW = pt.x;
-                int availH = pt.y - reservedPx;
                 // Store as landscape-canonical (width >= height) so the
                 // existing shouldInvertDecoderResolution swap below produces
                 // the correct request for portrait.
-                prefConfig.width  = Math.max(availW, availH);
-                prefConfig.height = Math.min(availW, availH);
+                prefConfig.width  = Math.max(pt.x, pt.y);
+                prefConfig.height = Math.min(pt.x, pt.y);
                 LimeLog.info("auto-resolution: screen=" + pt.x + "x" + pt.y
                         + " density=" + getResources().getDisplayMetrics().density
-                        + " reservedPx=" + reservedPx
                         + " portrait=" + portraitMode
-                        + " -> canonical " + prefConfig.width + "x" + prefConfig.height);
+                        + " -> canonical " + prefConfig.width + "x" + prefConfig.height
+                        + " (PC-keys reserve handled client-side)");
             }
 
             displayWidth = shouldInvertDecoderResolution ? prefConfig.height : prefConfig.width;
@@ -589,22 +573,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             if (!isOnExternalDisplay()) {
                 int newInset = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom;
                 if (newInset != imeBottomInset) {
-                    boolean opening = imeBottomInset == 0 && newInset > 0;
                     boolean closing = imeBottomInset > 0 && newInset == 0;
                     imeBottomInset = newInset;
-
-                    // Auto-enable pan/zoom mode while the IME is up so a two-finger
-                    // drag pans the stream — otherwise the bottom of the stream
-                    // (where the cursor often is) stays hidden behind the keyboard.
-                    // Restore the previous mode on IME close.
-                    if (opening) {
-                        panZoomBeforeIme = isPanZoomMode;
-                        if (!isPanZoomMode) {
-                            toggleZoomMode();
-                        }
-                    } else if (closing && !panZoomBeforeIme && isPanZoomMode) {
-                        toggleZoomMode();
-                    }
 
                     if (panZoomHandler != null) {
                         panZoomHandler.setImeBottomInset(newInset);
@@ -1391,6 +1361,19 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 streamContainer.setLayoutParams(lp);
             }
         }
+        // When the panel reserves space, stretch the stream to fill the
+        // shrunken container exactly (aspect=0 → onMeasure uses super, which
+        // fills bounds). The host framebuffer is still the tablet's full
+        // dimensions, so this introduces ~4% vertical compression — well
+        // below visual detection. When reserve is off, restore the aspect
+        // ratio match so the stream sits 1:1 with the container.
+        if (streamContainer != null) {
+            if (reserve > 0) {
+                streamContainer.setDesiredAspectRatio(0);
+            } else if (displayWidth > 0 && displayHeight > 0) {
+                streamContainer.setDesiredAspectRatio((double) displayWidth / (double) displayHeight);
+            }
+        }
     }
 
     // Flip the reserve-stream-space preference. When on, the streamContainer is
@@ -1416,7 +1399,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private void requestHostResize(int width, int height) {
         if (host == null || host.isEmpty() || width <= 0 || height <= 0) return;
         final String url = "http://" + host + ":" + RESIZE_DAEMON_PORT + "/resize";
-        final String body = "{\"w\":" + width + ",\"h\":" + height + ",\"output\":\"DP-2\"}";
+        // Capture target (DP-0 / DP-2 / IS_PHYSICAL) is chosen host-side via the
+        // Sunshine app's prep-cmd writing $XDG_RUNTIME_DIR/sunshine_active_output,
+        // which the resize daemon reads on each request. The client just sends
+        // the desired dimensions and lets the host route them.
+        final String body = "{\"w\":" + width + ",\"h\":" + height + "}";
         Thread t = new Thread(() -> {
             try {
                 okhttp3.OkHttpClient cli = new okhttp3.OkHttpClient.Builder()
@@ -1483,15 +1470,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
         }
         applyPanelReserveToStreamContainer();
-        // The streamed resolution was fixed at session start; mid-stream
-        // toggling produces letterbox/pillarbox until reconnect. Disconnect
-        // automatically so the next reconnect picks up the new resolution
-        // (the Sunshine prep_cmd will resize the host's virtual display).
-        Toast.makeText(this,
-                pcKeysEnabled ? "PC Keys: On — switching resolution…"
-                              : "PC Keys: Off — switching resolution…",
-                Toast.LENGTH_SHORT).show();
-        relaunchForNewResolution();
+        // No reconnect required — the host framebuffer stays at the tablet's
+        // full screen dimensions, and the StreamContainer just shrinks/expands
+        // client-side. GL composite handles the small (~4%) vertical scaling
+        // when reserve is on. Avoids the Mutter blank + gnome-shell restart
+        // that a host resize would trigger on every toggle.
     }
 
     // Smooth re-stream cycle: tell Sunshine to terminate the running app
@@ -3553,6 +3536,18 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         return true;
                     }
 
+                    // While the soft keyboard is up, two-finger drag pans the
+                    // stream so the user can slide the text-cursor area out from
+                    // behind the keyboard. Pan only — no pinch-zoom, since the
+                    // user just wants to peek under the keyboard, not change
+                    // scale. Single-finger taps still go through absolute
+                    // touch as normal. PanZoomHandler.imeBottomInset already
+                    // expands the legal childY range for this slide.
+                    if (imeBottomInset > 0 && event.getPointerCount() >= 2) {
+                        panZoomHandler.handlePanOnlyTouchEvent(event);
+                        return true;
+                    }
+
                     if (isPanZoomMode) {
                         // panning the streamView
                         panZoomHandler.handleTouchEvent(event);
@@ -4472,11 +4467,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
     public void toggleZoomMode() {
         this.isPanZoomMode = !this.isPanZoomMode;
-        if (this.isPanZoomMode) {
-            Toast.makeText(this, getString(R.string.pan_zoom_mode_enabled), Toast.LENGTH_SHORT).show();
-        } else {
-            Toast.makeText(this, getString(R.string.pan_zoom_mode_disabled), Toast.LENGTH_SHORT).show();
-        }
         updateZoomButtonAppearance();
 
         if (ExternalDisplayControlActivity.instance != null) {

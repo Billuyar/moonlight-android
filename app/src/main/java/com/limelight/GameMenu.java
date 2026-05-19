@@ -255,14 +255,6 @@ public class GameMenu implements Game.GameMenuCallbacks {
             options.add(new MenuOption(getString(R.string.game_menu_toggle_virtual_model), true, game::toggleVirtualController));
         }
         options.add(new MenuOption(getString(R.string.game_menu_toggle_virtual_keyboard_model), true, game::toggleFullKeyboard));
-        if (!game.isOnExternalDisplay()) {
-            // Master "PC keys" toggle: single-row panel docked at bottom +
-            // reserved stream space + host resolution adjusted to fit.
-            // Triggers a quick auto-reconnect so the host's framebuffer is
-            // reshaped before capture resumes — the keys row sits in its
-            // own area, not on top of the stream.
-            options.add(new MenuOption("Toggle PC keys", true, game::togglePcKeysEnabled));
-        }
         options.add(new MenuOption(getString(R.string.game_menu_task_manager), true, () -> sendKeys(new short[]{KeyboardTranslator.VK_LCONTROL, KeyboardTranslator.VK_LSHIFT, KeyboardTranslator.VK_ESCAPE})));
 
         // **FIXED:** This is a UI navigation action, so it should not use withGameFocus.
@@ -328,9 +320,12 @@ public class GameMenu implements Game.GameMenuCallbacks {
         options.add(new MenuOption(getString(game.isZoomModeEnabled() ? R.string.game_menu_disable_zoom_mode : R.string.game_menu_enable_zoom_mode), true,
                 game::toggleZoomMode));
 
-        if (dialogScreenContext == game) {
-            options.add(new MenuOption(getString(R.string.game_menu_rotate_screen), true,
-                    game::rotateScreen));
+        if (!game.isOnExternalDisplay()) {
+            // Master "PC keys" toggle: single-row panel docked at bottom +
+            // reserved stream space + host resolution adjusted to fit.
+            // Triggers a quick auto-reconnect so the host's framebuffer is
+            // reshaped before capture resumes.
+            options.add(new MenuOption("Toggle PC keys", true, game::togglePcKeysEnabled));
         }
 
         options.add(new MenuOption(getString(R.string.game_menu_advanced), true,

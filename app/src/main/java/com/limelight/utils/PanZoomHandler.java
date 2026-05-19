@@ -48,6 +48,13 @@ public class PanZoomHandler {
         gestureDetector.onTouchEvent(motionEvent);
     }
 
+    // Pan-only variant: skips the pinch-zoom detector. Used by the IME-up
+    // two-finger-scroll path so the user can slide the stream to reveal
+    // text-cursor area without accidentally zooming.
+    public void handlePanOnlyTouchEvent(MotionEvent motionEvent) {
+        gestureDetector.onTouchEvent(motionEvent);
+    }
+
     private void updateDimensions() {
         childHeight = streamView.getHeight() * scaleFactor;
         childWidth = streamView.getWidth() * scaleFactor;
