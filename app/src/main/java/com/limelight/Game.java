@@ -1432,12 +1432,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private static final int RESIZE_DAEMON_PORT = 47998;
 
     // Fire-and-forget POST to the host's clipboard-gesture endpoint. The
-    // host decides copy vs paste based on whether the focused window owns
-    // the PRIMARY selection. Called from AbsoluteTouchContext on a drag-
-    // release so a text selection auto-copies to CLIPBOARD — and the
-    // copied text is mirrored into Android's clipboard so the user can
-    // paste it via the soft keyboard's paste button.
-    private void triggerClipboardGesture() {
+    // host decides copy vs noop based on whether the under-cursor window
+    // has a fresh selection. Called from AbsoluteTouchContext on the
+    // quick tap that follows a drag-select. If the host noops (nothing
+    // to copy), we fall back to delivering the tap as a normal left-
+    // click at the tap position — the gesture detection consumed the
+    // built-in click, so we synthesize it here.
+    private void triggerClipboardGesture(int tapX, int tapY) {
         if (host == null || host.isEmpty()) return;
         final String url = "http://" + host + ":" + RESIZE_DAEMON_PORT + "/clipboard-gesture";
         new Thread(() -> {
@@ -1456,12 +1457,35 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     final String body = resp.body() != null ? resp.body().string() : "";
                     LimeLog.info("clipboard-gesture -> " + resp.code() + " "
                             + body.substring(0, Math.min(200, body.length())));
-                    mirrorClipboardIfCopy(body);
+                    if (body.contains("\"copy\"")) {
+                        mirrorClipboardIfCopy(body);
+                    } else {
+                        // Noop — host had nothing to copy. Deliver the
+                        // tap as a click so the user's interaction isn't
+                        // silently dropped.
+                        sendFallbackClick(tapX, tapY);
+                    }
                 }
             } catch (Exception e) {
                 LimeLog.info("clipboard-gesture unreachable (" + e + ")");
+                // Host unreachable — give the user their click back.
+                sendFallbackClick(tapX, tapY);
             }
         }, "clipboard-gesture-call").start();
+    }
+
+    private void sendFallbackClick(int x, int y) {
+        if (conn == null || streamContainer == null) return;
+        final int viewW = streamContainer.getWidth();
+        final int viewH = streamContainer.getHeight();
+        if (viewW <= 0 || viewH <= 0) return;
+        // Match what AbsoluteTouchContext does for a normal fast tap:
+        // position cursor, press, release 100 ms later.
+        conn.sendMousePosition((short) x, (short) y, (short) viewW, (short) viewH);
+        conn.sendMouseButtonDown(com.limelight.nvstream.input.MouseButtonPacket.BUTTON_LEFT);
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
+                () -> conn.sendMouseButtonUp(com.limelight.nvstream.input.MouseButtonPacket.BUTTON_LEFT),
+                100);
     }
 
     // If the host responded with action=copy, parse out content and push
@@ -4896,7 +4920,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 touchContextMap[i] = null;
             } else if (!prefConfig.touchscreenTrackpad) {
                 AbsoluteTouchContext atc = new AbsoluteTouchContext(conn, i, streamContainer, mode == 5);
-                atc.setCopyTapHandler(this::triggerClipboardGesture);
+                atc.setCopyTapHandler((tx, ty) -> triggerClipboardGesture(tx, ty));
                 touchContextMap[i] = atc;
             } else if (mode == 3) {
                 touchContextMap[i] = new RelativeTouchContext(conn, i, REFERENCE_HORIZ_RES, REFERENCE_VERT_RES, streamContainer, prefConfig);

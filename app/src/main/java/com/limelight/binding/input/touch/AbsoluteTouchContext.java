@@ -103,9 +103,13 @@ public class AbsoluteTouchContext implements TouchContext {
         }
     };
 
-    private Runnable copyTapHandler;
+    public interface CopyTapHandler {
+        void onCopyTap(int x, int y);
+    }
 
-    public void setCopyTapHandler(Runnable handler) {
+    private CopyTapHandler copyTapHandler;
+
+    public void setCopyTapHandler(CopyTapHandler handler) {
         this.copyTapHandler = handler;
     }
 
@@ -217,7 +221,9 @@ public class AbsoluteTouchContext implements TouchContext {
                 if (pendingCopyTap) {
                     pendingCopyTap = false;
                     handler.removeCallbacks(clearPendingCopyRunnable);
-                    if (copyTapHandler != null) copyTapHandler.run();
+                    if (copyTapHandler != null) {
+                        copyTapHandler.onCopyTap(eventX, eventY);
+                    }
                 } else {
                     tapConfirmed();
                     // Release the left mouse button in 100ms to allow for apps that use polling
