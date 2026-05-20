@@ -1431,6 +1431,64 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     // Port of the host-side resize daemon. See /data/screens/scripts/resize_daemon.py.
     private static final int RESIZE_DAEMON_PORT = 47998;
 
+    // Fire-and-forget POST to the host's clipboard-gesture endpoint. The
+    // host decides copy vs paste based on whether the focused window owns
+    // the PRIMARY selection. Called from AbsoluteTouchContext on a drag-
+    // release so a text selection auto-copies to CLIPBOARD — and the
+    // copied text is mirrored into Android's clipboard so the user can
+    // paste it via the soft keyboard's paste button.
+    private void triggerClipboardGesture() {
+        if (host == null || host.isEmpty()) return;
+        final String url = "http://" + host + ":" + RESIZE_DAEMON_PORT + "/clipboard-gesture";
+        new Thread(() -> {
+            try {
+                okhttp3.OkHttpClient cli = new okhttp3.OkHttpClient.Builder()
+                        .connectTimeout(2, java.util.concurrent.TimeUnit.SECONDS)
+                        .readTimeout(3, java.util.concurrent.TimeUnit.SECONDS)
+                        .writeTimeout(2, java.util.concurrent.TimeUnit.SECONDS)
+                        .build();
+                okhttp3.Request req = new okhttp3.Request.Builder()
+                        .url(url)
+                        .post(okhttp3.RequestBody.create("{}",
+                                okhttp3.MediaType.parse("application/json")))
+                        .build();
+                try (okhttp3.Response resp = cli.newCall(req).execute()) {
+                    final String body = resp.body() != null ? resp.body().string() : "";
+                    LimeLog.info("clipboard-gesture -> " + resp.code() + " "
+                            + body.substring(0, Math.min(200, body.length())));
+                    mirrorClipboardIfCopy(body);
+                }
+            } catch (Exception e) {
+                LimeLog.info("clipboard-gesture unreachable (" + e + ")");
+            }
+        }, "clipboard-gesture-call").start();
+    }
+
+    // If the host responded with action=copy, parse out content and push
+    // it into Android's clipboard so the user can paste it elsewhere via
+    // the soft keyboard.
+    private void mirrorClipboardIfCopy(String body) {
+        try {
+            org.json.JSONObject json = new org.json.JSONObject(body);
+            if (!"copy".equals(json.optString("action"))) return;
+            final String content = json.optString("content", "");
+            if (content.isEmpty()) return;
+            runOnUiThread(() -> {
+                android.content.ClipboardManager cm =
+                        (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                if (cm != null) {
+                    cm.setPrimaryClip(
+                            android.content.ClipData.newPlainText("moonlight", content));
+                    Toast.makeText(this,
+                            "copied " + content.length() + " chars",
+                            Toast.LENGTH_SHORT).show();
+                }
+            });
+        } catch (Exception e) {
+            LimeLog.info("mirrorClipboardIfCopy parse failed: " + e);
+        }
+    }
+
     // Fire-and-wait POST to the host's resize daemon. Blocks up to 2 seconds.
     // Called from the main thread during onCreate before the stream connection
     // starts — quick enough not to be noticeable. Silently skipped if the
@@ -4837,7 +4895,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 // Touch mouse disabled
                 touchContextMap[i] = null;
             } else if (!prefConfig.touchscreenTrackpad) {
-                touchContextMap[i] = new AbsoluteTouchContext(conn, i, streamContainer, mode == 5);
+                AbsoluteTouchContext atc = new AbsoluteTouchContext(conn, i, streamContainer, mode == 5);
+                atc.setCopyTapHandler(this::triggerClipboardGesture);
+                touchContextMap[i] = atc;
             } else if (mode == 3) {
                 touchContextMap[i] = new RelativeTouchContext(conn, i, REFERENCE_HORIZ_RES, REFERENCE_VERT_RES, streamContainer, prefConfig);
             } else {

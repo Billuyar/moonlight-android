@@ -29,12 +29,21 @@ public class AbsoluteTouchContext implements TouchContext {
             // This timer should have already expired, but cancel it just in case
             cancelTapDownTimer();
 
-            // Switch from a left click to a right click after a long press
+            // Switch from a left click to a right click after a long press.
+            // Critical ordering: the left-button release MUST land before
+            // the right-button press, otherwise the host sees both buttons
+            // pressed simultaneously and the lingering left-up event after
+            // the right-up dismisses the context menu. Sending the two
+            // messages back-to-back lets Sunshine coalesce them; a small
+            // delay forces them onto separate input frames.
             confirmedLongPress = true;
             if (confirmedTap) {
                 conn.sendMouseButtonUp(buttonPrimary);
+                handler.postDelayed(
+                        () -> conn.sendMouseButtonDown(buttonSecondary), 60);
+            } else {
+                conn.sendMouseButtonDown(buttonSecondary);
             }
-            conn.sendMouseButtonDown(buttonSecondary);
         }
     };
 
@@ -60,14 +69,45 @@ public class AbsoluteTouchContext implements TouchContext {
 
     private static final int SCROLL_SPEED_FACTOR = 3;
 
-    private static final int LONG_PRESS_TIME_THRESHOLD = 650;
-    private static final int LONG_PRESS_DISTANCE_THRESHOLD = 30;
+    // Long-press to right-click. Bumped from Moonlight's defaults of
+    // (650, 30) because on a 1080-wide phone, 30 px of allowed jitter
+    // is ~3% of the screen and a steady hand easily exceeds it during
+    // a half-second hold, cancelling the timer before it fires.
+    private static final int LONG_PRESS_TIME_THRESHOLD = 500;
+    private static final int LONG_PRESS_DISTANCE_THRESHOLD = 80;
 
     private static final int DOUBLE_TAP_TIME_THRESHOLD = 250;
     private static final int DOUBLE_TAP_DISTANCE_THRESHOLD = 60;
 
     private static final int TOUCH_DOWN_DEAD_ZONE_TIME_THRESHOLD = 100;
     private static final int TOUCH_DOWN_DEAD_ZONE_DISTANCE_THRESHOLD = 20;
+
+    // Two-phase copy gesture: (1) a drag with the left button held down
+    // selects text on the host; on touch-release we ARM a "pending copy"
+    // flag instead of copying immediately, because mid-select copies
+    // sometimes captured stale PRIMARY content. (2) The NEXT quick tap
+    // (lifted within the tap-down deadzone, no movement) fires the
+    // configured handler — and we suppress the left click that the tap
+    // would normally produce, so the click doesn't deselect the text
+    // before the host reads PRIMARY. The flag auto-expires so a tap
+    // long after a select doesn't mysteriously copy.
+    private static final int DRAG_SELECT_DISTANCE_THRESHOLD = 60;
+    private static final int PENDING_COPY_EXPIRY_MS = 4000;
+
+    private boolean pendingCopyTap;
+
+    private final Runnable clearPendingCopyRunnable = new Runnable() {
+        @Override
+        public void run() {
+            pendingCopyTap = false;
+        }
+    };
+
+    private Runnable copyTapHandler;
+
+    public void setCopyTapHandler(Runnable handler) {
+        this.copyTapHandler = handler;
+    }
 
     public AbsoluteTouchContext(NvConnection conn, int actionIndex, View view, boolean swapped)
     {
@@ -144,20 +184,47 @@ public class AbsoluteTouchContext implements TouchContext {
             // Raise the mouse buttons that we currently have down
             if (confirmedLongPress) {
                 conn.sendMouseButtonUp(buttonSecondary);
+                // Long-press = right-click, not a copy tap.
+                pendingCopyTap = false;
+                handler.removeCallbacks(clearPendingCopyRunnable);
             }
             else if (confirmedTap) {
+                // Make sure the cursor is at the finger-up position
+                // BEFORE we release the button, so the drag-select
+                // extends to where the user actually lifted. Without
+                // this, the selection ends at the last touchMove
+                // position (which may lag behind the lift point) and
+                // a few characters at the end get dropped.
+                updatePosition(eventX, eventY);
                 conn.sendMouseButtonUp(buttonPrimary);
+                // If the finger moved enough to be a drag-select, arm
+                // pendingCopyTap so the NEXT quick tap fires the copy
+                // handler (replacing its click). Mid-select copying was
+                // unreliable, so we wait for an explicit tap.
+                if (distanceExceeds(eventX - lastTouchDownX,
+                                    eventY - lastTouchDownY,
+                                    DRAG_SELECT_DISTANCE_THRESHOLD)) {
+                    pendingCopyTap = true;
+                    handler.removeCallbacks(clearPendingCopyRunnable);
+                    handler.postDelayed(clearPendingCopyRunnable, PENDING_COPY_EXPIRY_MS);
+                }
             }
             else {
-                // If we get here, this means that the tap completed within the touch down
-                // deadzone time. We'll need to send the touch down and up events now at the
-                // original touch down position.
-                tapConfirmed();
-
-                // Release the left mouse button in 100ms to allow for apps that use polling
-                // to detect mouse button presses.
-                handler.removeCallbacks(leftButtonUpRunnable);
-                handler.postDelayed(leftButtonUpRunnable, 100);
+                // Quick tap (lifted within deadzone). If a copy is
+                // pending from a recent drag-select, fire that instead
+                // of the click — sending a click would deselect the
+                // text before the host reads PRIMARY.
+                if (pendingCopyTap) {
+                    pendingCopyTap = false;
+                    handler.removeCallbacks(clearPendingCopyRunnable);
+                    if (copyTapHandler != null) copyTapHandler.run();
+                } else {
+                    tapConfirmed();
+                    // Release the left mouse button in 100ms to allow for apps that use polling
+                    // to detect mouse button presses.
+                    handler.removeCallbacks(leftButtonUpRunnable);
+                    handler.postDelayed(leftButtonUpRunnable, 100);
+                }
             }
         }
 
@@ -212,6 +279,16 @@ public class AbsoluteTouchContext implements TouchContext {
             if (distanceExceeds(eventX - lastTouchDownX, eventY - lastTouchDownY, LONG_PRESS_DISTANCE_THRESHOLD)) {
                 // Moved too far since touch down. Cancel the long press timer.
                 cancelLongPressTimer();
+            }
+
+            // Once the long-press has fired, the right button is held
+            // and the host has opened a context menu. Don't move the
+            // cursor on subsequent jitter — drift between right-down and
+            // right-up lets Mutter interpret the release as a click
+            // outside the menu, dismissing it before the user can pick
+            // an item.
+            if (confirmedLongPress) {
+                return true;
             }
 
             // Ignore motion within the deadzone period after touch down
