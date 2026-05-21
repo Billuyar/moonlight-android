@@ -573,6 +573,8 @@
     <string name="summary_checkbox_forceTightThresholds">Tighter VSYNC thresholds for lower latency; may increase drops.</string>
     <string name="title_checkbox_use_virtual_display">Use Virtual Display</string>
     <string name="summary_checkbox_use_virtual_display">Use Virtual Display by default.\nVirtual Display can automatically match your client side resolution and frame rate settings, giving you a seamless streaming experience.\nRequires Apollo as host streaming software.</string>
+    <string name="title_auto_move_to_virtual">Move windows to Virtual on connect</string>
+    <string name="summary_auto_move_to_virtual">When you start (or resume) a Virtual stream, pull all Primary-monitor windows onto Virtual automatically. Use the in-game menu \"Move all to Primary\" to send them back, or \"Move all to Virtual\" to re-pull mid-session.</string>
     <string name="title_checkbox_resume_without_confirm">Quick Resume</string>
     <string name="summary_checkbox_resume_without_confirm">Do not show resume menu when clicking resume button, resume the app immediately.</string>
     <string name="title_checkbox_enable_sticky_modifier_key_virtual_keyboard">Sticky modifier keys</string>

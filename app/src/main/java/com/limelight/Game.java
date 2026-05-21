@@ -1561,6 +1561,84 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
     }
 
+    // ---------------------------------------------------------------------
+    // Quick Menu commands to migrate windows between Primary (DP-0) and
+    // Virtual (DP-2) mid-stream. Hits the host's resize daemon, which
+    // delegates to /data/screens/scripts/move_all_windows.py.
+    //
+    // Two callers:
+    //   - GameMenu entries: onlyIfFresh=false → always act, shows toast.
+    //   - connectionStarted auto-fire for Virtual sessions: onlyIfFresh=true
+    //     → daemon no-ops if the sentinel is absent (no fresh prep-cmd or
+    //     SUSPENDED→ACTIVE transition since the last move). Suppresses the
+    //     toast on a sentinel skip so we don't spam the user mid-resume.
+    // ---------------------------------------------------------------------
+    public void requestMoveWindows(final String direction, final boolean onlyIfFresh) {
+        if (host == null || host.isEmpty()) return;
+        final String url = "http://" + host + ":" + RESIZE_DAEMON_PORT + "/windows/move";
+        final String body = "{\"direction\":\"" + direction + "\""
+                + (onlyIfFresh ? ",\"only_if_fresh\":true" : "") + "}";
+        new Thread(() -> {
+            try {
+                okhttp3.OkHttpClient cli = new okhttp3.OkHttpClient.Builder()
+                        .connectTimeout(2, java.util.concurrent.TimeUnit.SECONDS)
+                        .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                        .writeTimeout(2, java.util.concurrent.TimeUnit.SECONDS)
+                        .build();
+                okhttp3.Request req = new okhttp3.Request.Builder()
+                        .url(url)
+                        .post(okhttp3.RequestBody.create(body,
+                                okhttp3.MediaType.parse("application/json")))
+                        .build();
+                try (okhttp3.Response resp = cli.newCall(req).execute()) {
+                    final String respBody = resp.body() != null ? resp.body().string() : "";
+                    LimeLog.info("move-windows " + direction + " (onlyIfFresh=" + onlyIfFresh
+                            + ") -> " + resp.code() + " "
+                            + respBody.substring(0, Math.min(200, respBody.length())));
+                    if (shouldShowMoveToast(respBody, onlyIfFresh)) {
+                        final String toast = describeMoveResult(respBody, resp.code());
+                        runOnUiThread(() -> Toast.makeText(this, toast, Toast.LENGTH_SHORT).show());
+                    }
+                }
+            } catch (Exception e) {
+                LimeLog.info("move-windows unreachable (" + e + ")");
+                if (!onlyIfFresh) {
+                    runOnUiThread(() -> Toast.makeText(this,
+                            "Move windows: host unreachable", Toast.LENGTH_SHORT).show());
+                }
+            }
+        }, "move-windows-call").start();
+    }
+
+    // Suppress the toast when an auto-fire was skipped by the daemon
+    // because there was no fresh-connect sentinel (i.e. the user is
+    // resuming with their windows already where they want them).
+    private boolean shouldShowMoveToast(String body, boolean onlyIfFresh) {
+        if (!onlyIfFresh) return true;
+        try {
+            org.json.JSONObject json = new org.json.JSONObject(body);
+            return !"no-sentinel".equals(json.optString("skipped_reason", ""));
+        } catch (Exception e) {
+            return true;
+        }
+    }
+
+    private String describeMoveResult(String body, int code) {
+        try {
+            org.json.JSONObject json = new org.json.JSONObject(body);
+            if (json.optBoolean("ok", false)) {
+                int moved = json.optInt("moved", 0);
+                if (moved == 0) {
+                    return "Nothing to move";
+                }
+                return "Moved " + moved + " window" + (moved == 1 ? "" : "s");
+            }
+            return "Move failed: " + json.optString("error", "code " + code);
+        } catch (Exception e) {
+            return "Move failed: code " + code;
+        }
+    }
+
     // Master "PC keys" toggle. When turning on: dock at bottom + reserve space
     // are forced on, single-row panel becomes visible, the two-row panel is
     // hidden, and the streamContainer shrinks above the panel. When turning
@@ -4437,6 +4515,20 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
                 // Sync local clipboard to host
                 handleFocusChange(true);
+
+                // Auto-move Primary windows onto Virtual if the user has
+                // the pref enabled. Always fires — the daemon's
+                // only_if_fresh check + the sentinel (written by prep-cmd
+                // on fresh Virtual launch, and by geometry_enforcer on
+                // SUSPENDED→ACTIVE) ensure this is a no-op for Primary
+                // streaming sessions and for Resume cases where the
+                // user's window arrangement should be preserved. Brief
+                // delay so prep-cmd / enforcer have written the sentinel.
+                if (prefConfig.autoMoveToVirtual) {
+                    timerHandler.postDelayed(
+                            () -> requestMoveWindows("primary-to-virtual", true),
+                            1500);
+                }
 
                 // Ensure overlay toggle button visibility is properly set
                 setupOverlayToggleButton();

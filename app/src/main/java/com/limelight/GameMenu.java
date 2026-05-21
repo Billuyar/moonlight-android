@@ -328,6 +328,16 @@ public class GameMenu implements Game.GameMenuCallbacks {
             options.add(new MenuOption("Toggle PC keys", true, game::togglePcKeysEnabled));
         }
 
+        // Bring Primary's windows over (when streaming Virtual) or shove
+        // Virtual's windows back (when streaming Primary or for cleanup).
+        // Host-side dispatch via resize daemon → move_all_windows.py. Quit
+        // automatically migrates DP-2 windows back to DP-0 (Mutter default
+        // when DP-2 is dropped), so this is for the mid-session case only.
+        options.add(new MenuOption("Move all to Virtual", true,
+                () -> game.requestMoveWindows("primary-to-virtual", false)));
+        options.add(new MenuOption("Move all to Primary", true,
+                () -> game.requestMoveWindows("virtual-to-primary", false)));
+
         options.add(new MenuOption(getString(R.string.game_menu_advanced), true,
                 () -> showAdvancedMenu(device)));
 
